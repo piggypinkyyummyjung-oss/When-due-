@@ -517,6 +517,7 @@ fun DetailScreen(
                 (when (i.type) { 2 -> "หมดประกัน "; 3 -> "กำหนดชำระ "; else -> "หมดอายุ " }) + thai(i.dueDay),
                 fontSize = 14.sp, color = GRAY
             )
+            if (i.every > 0) Text("ครบกำหนด " + repText(i.every, i.everyUnit), fontSize = 14.sp, color = GRAY)
             val start = if (i.type == 1 || i.type == 2) i.baseDay else i.id / 86_400_000L
             val total = (i.dueDay - start).coerceAtLeast(1)
             val frac = ((LocalDate.now().toEpochDay() - start).toFloat() / total).coerceIn(0f, 1f)
@@ -542,7 +543,7 @@ fun DetailScreen(
             border = BorderStroke(1.dp, INK), colors = ButtonDefaults.outlinedButtonColors(contentColor = INK)
         ) { Text("แก้ไข", fontWeight = FontWeight.SemiBold) }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            TextButton(onClick = onDone) { Text(if (i.hasDate && i.repeat > 0) "เสร็จแล้ว (เลื่อนรอบถัดไป)" else "เสร็จแล้ว (เก็บถาวร)") }
+            TextButton(onClick = onDone) { Text(if (i.hasDate && i.every > 0) "เสร็จแล้ว (เลื่อนรอบถัดไป)" else "เสร็จแล้ว (เก็บถาวร)") }
             TextButton(onClick = onDelete) { Text("ลบ", color = RED) }
         }
     }
@@ -557,7 +558,8 @@ fun FormScreen(initial: Item?, cats: List<String>, leads: List<Int>, onClose: ()
     var ui by remember { mutableStateOf(if (initial != null && !initial.hasDate) 4 else initial?.type ?: 0) }
     var day by remember { mutableStateOf(initial?.baseDay ?: LocalDate.now().toEpochDay()) }
     var months by remember { mutableStateOf(initial?.months ?: 12) }
-    var repeat by remember { mutableStateOf(initial?.repeat ?: 0) }
+    var repN by remember { mutableStateOf(initial?.every ?: 0) }
+    var repUnit by remember { mutableStateOf(initial?.everyUnit ?: 1) }
     var details by remember { mutableStateOf(initial?.details ?: "") }
     var widget by remember { mutableStateOf(initial?.widget ?: true) }
     var sheet by remember { mutableStateOf(0) } // 1 หมวด 2 ชนิดวัน 3 วันที่ 4 ครบกำหนด 5 เดือน 6 เดือนกำหนดเอง
@@ -612,7 +614,7 @@ fun FormScreen(initial: Item?, cats: List<String>, leads: List<Int>, onClose: ()
             if (ui == 0 || ui == 3) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                     Select(dateLabel, thai(day), Modifier.weight(1f), cal = true) { sheet = 3 }
-                    Select("ครบกำหนด", REPEATS[repeat], Modifier.weight(1f)) { sheet = 4 }
+                    Select("ครบกำหนด", repText(repN, repUnit), Modifier.weight(1f)) { sheet = 4 }
                 }
             }
             if (ui == 1 || ui == 2) {
@@ -661,7 +663,8 @@ fun FormScreen(initial: Item?, cats: List<String>, leads: List<Int>, onClose: ()
                         id = initial?.id?.takeIf { it > 0 } ?: System.currentTimeMillis(),
                         name = name.trim(), category = cat, type = if (ui == 4) 0 else ui,
                         baseDay = day, months = months,
-                        repeat = if (ui == 0 || ui == 3) repeat else 0, details = details,
+                        repeat = if ((ui == 0 || ui == 3) && repN > 0) 3 else 0,
+                        repN = if (ui == 0 || ui == 3) repN else 0, repUnit = repUnit, details = details,
                         done = initial?.done ?: false, hasDate = ui != 4,
                         widget = widget, doneAt = initial?.doneAt ?: 0L
                     )
@@ -682,8 +685,12 @@ fun FormScreen(initial: Item?, cats: List<String>, leads: List<Int>, onClose: ()
         }
         3 -> CalendarSheet(day, { day = it; sheet = 0 }, { sheet = 0 })
         4 -> Sheet("ครบกำหนด", { sheet = 0 }) {
-            REPEATS.forEachIndexed { k, t -> OptionRow(t, selected = k == repeat) { repeat = k; sheet = 0 } }
+            PRESETS.forEach { (pn, pu) ->
+                OptionRow(repText(pn, pu), selected = repText(repN, repUnit) == repText(pn, pu)) { repN = pn; repUnit = pu; sheet = 0 }
+            }
+            OptionRow("กำหนดเอง…") { sheet = 7 }
         }
+        7 -> RepeatDialog(repN, repUnit, { n, u -> repN = n; repUnit = u; sheet = 0 }, { sheet = 0 })
         5 -> MonthsSheet(
             if (ui == 1) "อายุหลังเปิด" else "ระยะประกัน",
             if (ui == 1) listOf(3, 6, 9, 12, 18, 24, 36) else listOf(6, 12, 24, 36, 60),
@@ -882,4 +889,34 @@ fun SettingsTab(
             onClose = { leadPrompt = false }
         )
     }
+}
+
+// ครบกำหนดแบบสำเร็จรูป: (จำนวน, หน่วย) หน่วย 0 วัน 1 เดือน 2 ปี 3 สัปดาห์
+val PRESETS = listOf(0 to 1, 1 to 3, 1 to 1, 3 to 1, 6 to 1, 1 to 2, 2 to 2)
+
+@Composable
+fun RepeatDialog(n0: Int, u0: Int, onOk: (Int, Int) -> Unit, onClose: () -> Unit) {
+    var n by remember { mutableStateOf(if (n0 > 0) n0.toString() else "1") }
+    var u by remember { mutableStateOf(u0) }
+    AlertDialog(
+        onDismissRequest = onClose, shape = RectangleShape,
+        title = { Text("กำหนดเอง") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("ทุก")
+                    OutlinedTextField(
+                        n, { n = it.filter { ch -> ch.isDigit() } }, singleLine = true, shape = RectangleShape,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                        modifier = Modifier.width(96.dp)
+                    )
+                }
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf("วัน" to 0, "สัปดาห์" to 3, "เดือน" to 1, "ปี" to 2).forEach { (t, k) -> Chip(t, u == k) { u = k } }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = { val v = n.toIntOrNull() ?: 0; if (v in 1..999) onOk(v, u) }) { Text("ตกลง") } },
+        dismissButton = { TextButton(onClick = onClose) { Text("ยกเลิก") } }
+    )
 }

@@ -20,8 +20,13 @@ data class Item(
     val hasDate: Boolean,
     val widget: Boolean = true,
     val doneAt: Long = 0L,
-    val payDay: Long = 0L // วันที่ชำระ (0 = ไม่ระบุ)
+    val payDay: Long = 0L, // วันที่ชำระ (0 = ไม่ระบุ)
+    val repN: Int = 0, // ซ้ำทุก N หน่วย (0 = ใช้ค่า repeat แบบเดิม)
+    val repUnit: Int = 1 // 0 วัน, 1 เดือน, 2 ปี, 3 สัปดาห์
 ) {
+    val every: Int get() = if (repN > 0) repN else when (repeat) { 1 -> 12; 2 -> 6; else -> 0 }
+    val everyUnit: Int get() = if (repN > 0) repUnit else 1
+
     val dueDay: Long
         get() = if (type == 1 || type == 2)
             LocalDate.ofEpochDay(baseDay).plusMonths(months.toLong()).toEpochDay()
@@ -55,12 +60,28 @@ fun statusColor(n: Long): Int = when {
     else -> 0xFF1F6F43.toInt()
 }
 
+fun addEvery(d: LocalDate, n: Int, unit: Int): LocalDate = when (unit) {
+    0 -> d.plusDays(n.toLong())
+    1 -> d.plusMonths(n.toLong())
+    2 -> d.plusYears(n.toLong())
+    else -> d.plusWeeks(n.toLong())
+}
+
+fun repText(n0: Int, u0: Int): String {
+    if (n0 <= 0) return "ครั้งเดียว"
+    var n = n0
+    var u = u0
+    if (u == 1 && n % 12 == 0) { n /= 12; u = 2 }
+    if (u == 0 && n % 7 == 0) { n /= 7; u = 3 }
+    val unit = listOf("วัน", "เดือน", "ปี", "สัปดาห์")[u]
+    return if (n == 1) "ทุก$unit" else "ทุก $n $unit"
+}
+
 // ติ๊กเสร็จ: ถ้าตั้งซ้ำ เลื่อนไปรอบถัดไป ถ้าไม่ซ้ำ ย้ายเข้าที่เก็บถาวร
 fun roll(i: Item): Item {
-    if (i.hasDate && i.repeat > 0) {
-        val m = if (i.repeat == 1) 12L else 6L
-        val next = LocalDate.ofEpochDay(i.dueDay).plusMonths(m).toEpochDay()
-        val pay = if (i.payDay > 0) LocalDate.ofEpochDay(i.payDay).plusMonths(m).toEpochDay() else 0L
+    if (i.hasDate && i.every > 0) {
+        val next = addEvery(LocalDate.ofEpochDay(i.dueDay), i.every, i.everyUnit).toEpochDay()
+        val pay = if (i.payDay > 0) addEvery(LocalDate.ofEpochDay(i.payDay), i.every, i.everyUnit).toEpochDay() else 0L
         return i.copy(type = if (i.type == 3) 3 else 0, baseDay = next, payDay = pay)
     }
     return i.copy(done = true, doneAt = LocalDate.now().toEpochDay())
@@ -74,7 +95,7 @@ fun itemsToJson(list: List<Item>): JSONArray {
                 .put("type", it.type).put("baseDay", it.baseDay).put("months", it.months)
                 .put("repeat", it.repeat).put("details", it.details)
                 .put("done", it.done).put("hasDate", it.hasDate)
-                .put("widget", it.widget).put("doneAt", it.doneAt).put("payDay", it.payDay)
+                .put("widget", it.widget).put("doneAt", it.doneAt).put("payDay", it.payDay).put("repN", it.repN).put("repUnit", it.repUnit)
         )
     }
     return a
@@ -87,7 +108,7 @@ fun itemsFromJson(a: JSONArray): List<Item> = List(a.length()) { k ->
         o.getInt("type"), o.getLong("baseDay"), o.getInt("months"),
         o.getInt("repeat"), o.getString("details"),
         o.getBoolean("done"), o.getBoolean("hasDate"),
-        o.optBoolean("widget", true), o.optLong("doneAt", 0L), o.optLong("payDay", 0L)
+        o.optBoolean("widget", true), o.optLong("doneAt", 0L), o.optLong("payDay", 0L), o.optInt("repN", 0), o.optInt("repUnit", 1)
     )
 }
 
