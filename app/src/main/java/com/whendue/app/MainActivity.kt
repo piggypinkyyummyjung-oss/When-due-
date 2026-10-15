@@ -252,6 +252,7 @@ fun Select(label: String, value: String, modifier: Modifier = Modifier, cal: Boo
             horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically
         ) {
             Text(value, fontSize = 16.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+            Spacer(Modifier.width(8.dp))
             if (cal) CalIcon() else ChevIcon()
         }
     }
@@ -526,7 +527,7 @@ fun DetailScreen(
             }
             Heading("เตือนล่วงหน้า")
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                leads.sortedDescending().forEach { d ->
+                (if (i.customLeads.isNotEmpty()) i.customLeads else leads).sortedDescending().forEach { d ->
                     val passed = n <= d
                     Tag("$d วัน · " + if (passed) "แล้ว" else "รอเตือน", if (passed) Color(0xFF1F6F43) else GRAY)
                 }
@@ -560,6 +561,7 @@ fun FormScreen(initial: Item?, cats: List<String>, leads: List<Int>, onClose: ()
     var months by remember { mutableStateOf(initial?.months ?: 12) }
     var repN by remember { mutableStateOf(initial?.every ?: 0) }
     var repUnit by remember { mutableStateOf(initial?.everyUnit ?: 1) }
+    var remind by remember { mutableStateOf(initial?.customLeads ?: emptyList()) }
     var details by remember { mutableStateOf(initial?.details ?: "") }
     var widget by remember { mutableStateOf(initial?.widget ?: true) }
     var sheet by remember { mutableStateOf(0) } // 1 หมวด 2 ชนิดวัน 3 วันที่ 4 ครบกำหนด 5 เดือน 6 เดือนกำหนดเอง
@@ -634,9 +636,12 @@ fun FormScreen(initial: Item?, cats: List<String>, leads: List<Int>, onClose: ()
                 }
             }
 
-            Select("เตือนล่วงหน้า", "ตามค่าเริ่มต้น · " + leads.sortedDescending().joinToString(", ") + " วัน", Modifier.fillMaxWidth()) {
-                Toast.makeText(c, "ปรับระยะเตือนได้ที่แท็บตั้งค่า", Toast.LENGTH_SHORT).show()
-            }
+            Select(
+                "เตือนล่วงหน้า",
+                if (remind.isEmpty()) "ตามค่าเริ่มต้น (" + leads.sortedDescending().joinToString(", ") + " วัน)"
+                else remind.sortedDescending().joinToString(", ") + " วัน",
+                Modifier.fillMaxWidth()
+            ) { sheet = 8 }
 
             Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Lab("รายละเอียด")
@@ -664,7 +669,7 @@ fun FormScreen(initial: Item?, cats: List<String>, leads: List<Int>, onClose: ()
                         name = name.trim(), category = cat, type = if (ui == 4) 0 else ui,
                         baseDay = day, months = months,
                         repeat = if ((ui == 0 || ui == 3) && repN > 0) 3 else 0,
-                        repN = if (ui == 0 || ui == 3) repN else 0, repUnit = repUnit, details = details,
+                        repN = if (ui == 0 || ui == 3) repN else 0, repUnit = repUnit, remind = remind.joinToString(","), details = details,
                         done = initial?.done ?: false, hasDate = ui != 4,
                         widget = widget, doneAt = initial?.doneAt ?: 0L
                     )
@@ -690,6 +695,7 @@ fun FormScreen(initial: Item?, cats: List<String>, leads: List<Int>, onClose: ()
             }
             OptionRow("กำหนดเอง…") { sheet = 7 }
         }
+        8 -> RemindSheet(remind, leads, { remind = it; sheet = 0 }, { sheet = 0 })
         7 -> RepeatDialog(repN, repUnit, { n, u -> repN = n; repUnit = u; sheet = 0 }, { sheet = 0 })
         5 -> MonthsSheet(
             if (ui == 1) "อายุหลังเปิด" else "ระยะประกัน",
@@ -919,4 +925,34 @@ fun RepeatDialog(n0: Int, u0: Int, onOk: (Int, Int) -> Unit, onClose: () -> Unit
         confirmButton = { TextButton(onClick = { val v = n.toIntOrNull() ?: 0; if (v in 1..999) onOk(v, u) }) { Text("ตกลง") } },
         dismissButton = { TextButton(onClick = onClose) { Text("ยกเลิก") } }
     )
+}
+
+@Composable
+fun RemindSheet(current: List<Int>, defaults: List<Int>, onOk: (List<Int>) -> Unit, onClose: () -> Unit) {
+    var useDefault by remember { mutableStateOf(current.isEmpty()) }
+    var sel by remember { mutableStateOf(current.ifEmpty { defaults }) }
+    var custom by remember { mutableStateOf(false) }
+    val options = (listOf(60, 30, 14, 7, 3, 1) + sel).distinct().sortedDescending()
+    Sheet("เตือนล่วงหน้า", onClose) {
+        OptionRow("ตามค่าเริ่มต้น (" + defaults.sortedDescending().joinToString(", ") + " วัน)", "ใช้ค่าจากแท็บตั้งค่า", useDefault) { useDefault = true }
+        OptionRow("กำหนดเอง", "เลือกเองว่าจะเตือนกี่วันก่อนครบกำหนด", !useDefault) { useDefault = false }
+        if (!useDefault) {
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                options.forEach { d -> Chip("$d วัน", d in sel) { sel = if (d in sel) sel - d else sel + d } }
+                Chip("+ เพิ่ม") { custom = true }
+            }
+            Hint("วันครบกำหนดจะเตือนให้เสมอ")
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = onClose, shape = RectangleShape, modifier = Modifier.weight(1f).height(52.dp), border = BorderStroke(1.dp, INK), colors = ButtonDefaults.outlinedButtonColors(contentColor = INK)) { Text("ยกเลิก", fontWeight = FontWeight.SemiBold) }
+            Button(onClick = { onOk(if (useDefault || sel.isEmpty()) emptyList() else sel.sortedDescending()) }, shape = RectangleShape, modifier = Modifier.weight(1f).height(52.dp)) { Text("ตกลง", fontWeight = FontWeight.SemiBold) }
+        }
+    }
+    if (custom) {
+        Prompt(
+            title = "เตือนล่วงหน้า (วัน)", initial = "", numeric = true,
+            onOk = { v -> v.toIntOrNull()?.let { if (it in 1..365) sel = (sel + it).distinct() }; custom = false },
+            onClose = { custom = false }
+        )
+    }
 }
