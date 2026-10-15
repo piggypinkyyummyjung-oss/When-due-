@@ -22,8 +22,10 @@ data class Item(
     val doneAt: Long = 0L,
     val payDay: Long = 0L, // วันที่ชำระ (0 = ไม่ระบุ)
     val repN: Int = 0, // ซ้ำทุก N หน่วย (0 = ใช้ค่า repeat แบบเดิม)
-    val repUnit: Int = 1 // 0 วัน, 1 เดือน, 2 ปี, 3 สัปดาห์
+    val repUnit: Int = 1, // 0 วัน, 1 เดือน, 2 ปี, 3 สัปดาห์
+    val remind: String = "" // เตือนล่วงหน้าเฉพาะรายการ เช่น "30,7,1" (ว่าง = ใช้ค่าเริ่มต้น)
 ) {
+    val customLeads: List<Int> get() = remind.split(",").mapNotNull { it.trim().toIntOrNull() }
     val every: Int get() = if (repN > 0) repN else when (repeat) { 1 -> 12; 2 -> 6; else -> 0 }
     val everyUnit: Int get() = if (repN > 0) repUnit else 1
 
@@ -95,7 +97,7 @@ fun itemsToJson(list: List<Item>): JSONArray {
                 .put("type", it.type).put("baseDay", it.baseDay).put("months", it.months)
                 .put("repeat", it.repeat).put("details", it.details)
                 .put("done", it.done).put("hasDate", it.hasDate)
-                .put("widget", it.widget).put("doneAt", it.doneAt).put("payDay", it.payDay).put("repN", it.repN).put("repUnit", it.repUnit)
+                .put("widget", it.widget).put("doneAt", it.doneAt).put("payDay", it.payDay).put("repN", it.repN).put("repUnit", it.repUnit).put("remind", it.remind)
         )
     }
     return a
@@ -108,7 +110,7 @@ fun itemsFromJson(a: JSONArray): List<Item> = List(a.length()) { k ->
         o.getInt("type"), o.getLong("baseDay"), o.getInt("months"),
         o.getInt("repeat"), o.getString("details"),
         o.getBoolean("done"), o.getBoolean("hasDate"),
-        o.optBoolean("widget", true), o.optLong("doneAt", 0L), o.optLong("payDay", 0L), o.optInt("repN", 0), o.optInt("repUnit", 1)
+        o.optBoolean("widget", true), o.optLong("doneAt", 0L), o.optLong("payDay", 0L), o.optInt("repN", 0), o.optInt("repUnit", 1), o.optString("remind", "")
     )
 }
 
