@@ -32,18 +32,28 @@ object Notify {
             NotificationChannel(CH, "แจ้งเตือนวันครบกำหนด", NotificationManager.IMPORTANCE_DEFAULT)
         )
         val leads = (Prefs.leads(c).map { it.toLong() } + 0L).toSet()
-        Store.load(c).filter { it.hasDate && !it.done && daysLeft(it.dueDay) in leads }.forEach {
+        val items = Store.load(c).filter { it.hasDate && !it.done }
+        items.filter { daysLeft(it.dueDay) in leads }.forEach {
             val n = daysLeft(it.dueDay)
             val text = if (n == 0L) "ครบกำหนดวันนี้" else "อีก $n วัน (${thai(it.dueDay)})"
-            val nb = Notification.Builder(c, CH)
-                .setSmallIcon(android.R.drawable.ic_popup_reminder)
-                .setContentTitle(it.name)
-                .setContentText(text)
-                .setAutoCancel(true)
-            try {
-                nm.notify(it.id.toInt(), nb.build())
-            } catch (e: SecurityException) {
-            }
+            post(c, nm, it.id.toInt(), it.name, text)
+        }
+        items.filter { it.payDay > 0 && daysLeft(it.payDay) in leads }.forEach {
+            val n = daysLeft(it.payDay)
+            val text = if (n == 0L) "ถึงกำหนดชำระวันนี้" else "ชำระอีก $n วัน (${thai(it.payDay)})"
+            post(c, nm, it.id.toInt() + 1, it.name, text)
+        }
+    }
+
+    private fun post(c: Context, nm: NotificationManager, id: Int, title: String, text: String) {
+        val nb = Notification.Builder(c, CH)
+            .setSmallIcon(android.R.drawable.ic_popup_reminder)
+            .setContentTitle(title)
+            .setContentText(text)
+            .setAutoCancel(true)
+        try {
+            nm.notify(id, nb.build())
+        } catch (e: SecurityException) {
         }
     }
 }

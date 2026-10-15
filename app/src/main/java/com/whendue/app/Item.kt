@@ -19,7 +19,8 @@ data class Item(
     val done: Boolean,
     val hasDate: Boolean,
     val widget: Boolean = true,
-    val doneAt: Long = 0L
+    val doneAt: Long = 0L,
+    val payDay: Long = 0L // วันที่ชำระ (0 = ไม่ระบุ)
 ) {
     val dueDay: Long
         get() = if (type == 1 || type == 2)
@@ -59,7 +60,8 @@ fun roll(i: Item): Item {
     if (i.hasDate && i.repeat > 0) {
         val m = if (i.repeat == 1) 12L else 6L
         val next = LocalDate.ofEpochDay(i.dueDay).plusMonths(m).toEpochDay()
-        return i.copy(type = 0, baseDay = next)
+        val pay = if (i.payDay > 0) LocalDate.ofEpochDay(i.payDay).plusMonths(m).toEpochDay() else 0L
+        return i.copy(type = 0, baseDay = next, payDay = pay)
     }
     return i.copy(done = true, doneAt = LocalDate.now().toEpochDay())
 }
@@ -72,7 +74,7 @@ fun itemsToJson(list: List<Item>): JSONArray {
                 .put("type", it.type).put("baseDay", it.baseDay).put("months", it.months)
                 .put("repeat", it.repeat).put("details", it.details)
                 .put("done", it.done).put("hasDate", it.hasDate)
-                .put("widget", it.widget).put("doneAt", it.doneAt)
+                .put("widget", it.widget).put("doneAt", it.doneAt).put("payDay", it.payDay)
         )
     }
     return a
@@ -85,7 +87,7 @@ fun itemsFromJson(a: JSONArray): List<Item> = List(a.length()) { k ->
         o.getInt("type"), o.getLong("baseDay"), o.getInt("months"),
         o.getInt("repeat"), o.getString("details"),
         o.getBoolean("done"), o.getBoolean("hasDate"),
-        o.optBoolean("widget", true), o.optLong("doneAt", 0L)
+        o.optBoolean("widget", true), o.optLong("doneAt", 0L), o.optLong("payDay", 0L)
     )
 }
 

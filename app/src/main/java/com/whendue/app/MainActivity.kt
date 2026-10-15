@@ -75,7 +75,16 @@ fun App() {
         WidgetProvider.refresh(c); Notify.schedule(c)
     }
 
-    MaterialTheme(colorScheme = lightColorScheme(primary = Color(THEME_COLORS[theme]))) {
+    MaterialTheme(
+        colorScheme = lightColorScheme(
+            primary = Color(THEME_COLORS[theme]), onPrimary = Color.White,
+            secondaryContainer = Color(0xFFF5F5F5), onSecondaryContainer = Color.Black,
+            background = Color.White, surface = Color.White,
+            surfaceContainer = Color.White, surfaceContainerHigh = Color.White,
+            surfaceContainerHighest = Color(0xFFF5F5F5), surfaceTint = Color.Transparent,
+            outline = Color(0xFFA3A3A3), outlineVariant = LINE
+        )
+    ) {
         Surface(Modifier.fillMaxSize(), color = Color.White) {
             Column(Modifier.fillMaxSize()) {
                 Box(Modifier.weight(1f)) {
@@ -114,6 +123,34 @@ fun App() {
 }
 
 @Composable
+fun Chip(label: String, selected: Boolean = false, onClick: () -> Unit) {
+    FilterChip(
+        selected = selected, onClick = onClick, label = { Text(label) }, shape = RectangleShape,
+        colors = FilterChipDefaults.filterChipColors(
+            selectedContainerColor = MaterialTheme.colorScheme.primary, selectedLabelColor = Color.White
+        )
+    )
+}
+
+@Composable
+fun Lbl(t: String) {
+    Text(t, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = GRAY, modifier = Modifier.padding(top = 6.dp))
+}
+
+@Composable
+fun Hint(t: String) {
+    Text(t, fontSize = 13.sp, color = GRAY)
+}
+
+@Composable
+fun Tag(t: String, col: Color) {
+    Text(
+        t, color = col, fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
+        modifier = Modifier.border(1.dp, col).padding(horizontal = 8.dp, vertical = 2.dp)
+    )
+}
+
+@Composable
 fun TabBar(sel: Int, onSel: (Int) -> Unit) {
     Column(Modifier.navigationBarsPadding()) {
         Box(Modifier.fillMaxWidth().height(1.dp).background(LINE))
@@ -140,7 +177,8 @@ fun Heading(t: String) {
 @Composable
 fun Home(all: List<Item>, onTick: (Item) -> Unit, onOpen: (Item) -> Unit, onAdd: () -> Unit) {
     val notes = all.filter { !it.hasDate && !it.done }
-    val dues = all.filter { it.hasDate && !it.done }.sortedBy { it.dueDay }
+    val dues = all.filter { it.hasDate && !it.done }
+        .sortedBy { if (it.payDay > 0) minOf(it.dueDay, it.payDay) else it.dueDay }
     Box(Modifier.fillMaxSize()) {
         LazyColumn(contentPadding = PaddingValues(start = 20.dp, top = 28.dp, end = 20.dp, bottom = 96.dp)) {
             item {
@@ -171,14 +209,17 @@ fun ItemRow(i: Item, onTick: () -> Unit, onOpen: () -> Unit) {
         Column(Modifier.weight(1f)) {
             Text(i.name, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
             Text(if (i.hasDate) "${i.category} · ${thai(i.dueDay)}" else i.category, fontSize = 14.sp, color = GRAY)
+            if (i.hasDate && i.payDay > 0) Text("ชำระ ${thai(i.payDay)}", fontSize = 14.sp, color = GRAY)
         }
         if (i.hasDate) {
             val n = daysLeft(i.dueDay)
-            val col = Color(statusColor(n))
-            Text(
-                leftText(n), color = col, fontSize = 13.sp, fontWeight = FontWeight.SemiBold,
-                modifier = Modifier.border(1.dp, col).padding(horizontal = 8.dp, vertical = 2.dp)
-            )
+            Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Tag((if (i.payDay > 0) "หมด " else "") + leftText(n), Color(statusColor(n)))
+                if (i.payDay > 0) {
+                    val p = daysLeft(i.payDay)
+                    Tag("ชำระ " + leftText(p), Color(statusColor(p)))
+                }
+            }
         }
     }
 }
@@ -265,25 +306,23 @@ fun SettingsTab(
 
         Heading("หมวดของฉัน")
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            cats.forEach { k -> FilterChip(selected = false, onClick = { catPrompt = k }, label = { Text(k) }, shape = RectangleShape) }
-            FilterChip(selected = false, onClick = { catPrompt = "" }, label = { Text("+ เพิ่ม") }, shape = RectangleShape)
+            cats.forEach { k -> Chip(k) { catPrompt = k } }
+            Chip("+ เพิ่ม") { catPrompt = "" }
         }
-        Text("แตะหมวดเพื่อเปลี่ยนชื่อหรือลบ", fontSize = 14.sp, color = GRAY)
+        Hint("แตะหมวดเพื่อเปลี่ยนชื่อหรือลบ")
 
         Heading("การเตือน")
-        Text("เตือนล่วงหน้า (แตะเพื่อเอาออก)", fontSize = 14.sp, color = GRAY)
+        Hint("เตือนล่วงหน้า (แตะเพื่อเอาออก)")
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            leads.forEach { d ->
-                FilterChip(selected = true, onClick = { if (leads.size > 1) onLeads(leads - d) }, label = { Text("$d วัน ✕") }, shape = RectangleShape)
-            }
-            FilterChip(selected = false, onClick = { leadPrompt = true }, label = { Text("+ เพิ่ม") }, shape = RectangleShape)
+            leads.forEach { d -> Chip("$d วัน ✕", true) { if (leads.size > 1) onLeads(leads - d) } }
+            Chip("+ เพิ่ม") { leadPrompt = true }
         }
         Spacer(Modifier.height(8.dp))
         OutlinedButton(
             onClick = { TimePickerDialog(c, { _, h, m -> onTime(h * 60 + m) }, time / 60, time % 60, true).show() },
             shape = RectangleShape
         ) { Text("เวลาเตือน: %02d:%02d".format(time / 60, time % 60)) }
-        Text("ถ้าเตือนช้าหรือไม่มา ให้ปิดการประหยัดแบตของแอปนี้ในตั้งค่ามือถือ", fontSize = 14.sp, color = GRAY)
+        Hint("ถ้าเตือนช้าหรือไม่มา ให้ปิดการประหยัดแบตของแอปนี้ในตั้งค่ามือถือ")
 
         Heading("ธีมสี (แอปและ widget)")
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -296,7 +335,7 @@ fun SettingsTab(
                 ) { if (k == theme) Text("✓", color = Color.White, fontWeight = FontWeight.Bold) }
             }
         }
-        Text(THEME_NAMES[theme], fontSize = 14.sp, color = GRAY)
+        Hint(THEME_NAMES[theme])
 
         Heading("ข้อมูล")
         OutlinedButton(onClick = { exp.launch("whendue-backup.json") }, shape = RectangleShape, modifier = Modifier.fillMaxWidth()) { Text("สำรองข้อมูล (ส่งออกไฟล์)") }
@@ -336,9 +375,10 @@ fun AddDialog(initial: Item?, cats: List<String>, onClose: () -> Unit, onSave: (
     var day by remember { mutableStateOf(initial?.baseDay ?: LocalDate.now().toEpochDay()) }
     var months by remember { mutableStateOf((initial?.months ?: 12).toString()) }
     var repeat by remember { mutableStateOf(initial?.repeat ?: 0) }
+    var pay by remember { mutableStateOf(initial?.payDay ?: 0L) }
     var details by remember { mutableStateOf(initial?.details ?: "") }
     var widget by remember { mutableStateOf(initial?.widget ?: true) }
-    var picker by remember { mutableStateOf(false) }
+    var picker by remember { mutableStateOf(0) } // 0 = ปิด, 1 = วันหลัก, 2 = วันที่ชำระ
 
     val scanUri = remember { FileProvider.getUriForFile(c, c.packageName + ".fp", File(c.cacheDir, "scan.jpg")) }
     val takePic = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { ok ->
@@ -353,44 +393,82 @@ fun AddDialog(initial: Item?, cats: List<String>, onClose: () -> Unit, onSave: (
 
     val m = months.toIntOrNull() ?: 12
     val due = if (type == 1 || type == 2) LocalDate.ofEpochDay(day).plusMonths(m.toLong()).toEpochDay() else day
+    val primary = MaterialTheme.colorScheme.primary
 
     AlertDialog(
         onDismissRequest = onClose, shape = RectangleShape,
         title = { Text(if (initial == null) "เพิ่มรายการ" else "แก้ไขรายการ") },
         text = {
-            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 OutlinedButton(onClick = { takePic.launch(scanUri) }, shape = RectangleShape, modifier = Modifier.fillMaxWidth()) { Text("สแกนฉลากด้วยกล้อง") }
-                OutlinedTextField(name, { name = it }, label = { Text("ชื่อรายการ") }, shape = RectangleShape, singleLine = true)
+
+                Lbl("ชื่อรายการ")
+                OutlinedTextField(
+                    name, { name = it }, placeholder = { Text("เช่น พ.ร.บ. รถ, ครีมกันแดด") },
+                    shape = RectangleShape, singleLine = true, modifier = Modifier.fillMaxWidth()
+                )
+
+                Lbl("หมวด")
                 Box {
-                    OutlinedButton(onClick = { catMenu = true }, shape = RectangleShape) { Text("หมวด: $cat") }
+                    OutlinedButton(onClick = { catMenu = true }, shape = RectangleShape) { Text(cat) }
                     DropdownMenu(expanded = catMenu, onDismissRequest = { catMenu = false }) {
                         (cats + "อื่นๆ").distinct().forEach { k -> DropdownMenuItem(text = { Text(k) }, onClick = { cat = k; catMenu = false }) }
                     }
                 }
+
+                Lbl("ชนิดวัน")
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    listOf("วันบนฉลาก", "นับจากเปิดใช้", "ซื้อ + ประกัน", "โน้ต (ไม่มีวันที่)").forEachIndexed { k, t ->
-                        FilterChip(selected = type == k, onClick = { type = k }, label = { Text(t) }, shape = RectangleShape)
+                    listOf("วันบนฉลาก", "นับจากเปิดใช้", "ประกัน / รับประกัน", "โน้ต (ไม่มีวันที่)").forEachIndexed { k, t ->
+                        Chip(t, type == k) { type = k }
                     }
                 }
+                Hint(
+                    when (type) {
+                        0 -> "วันหมดอายุที่พิมพ์บนฉลาก หรือวันครบกำหนดที่รู้อยู่แล้ว (เช่น ภาษี)"
+                        1 -> "ใส่วันที่เริ่มเปิดใช้ + อายุหลังเปิด (PAO) แอปคำนวณวันหมดให้"
+                        2 -> "ใส่วันที่เริ่มประกัน + ระยะประกัน แอปคำนวณวันหมดให้ ใช้ได้ทั้งประกันภัยและรับประกันสินค้า"
+                        else -> "จดไว้เฉยๆ ไม่มีวันที่และไม่แจ้งเตือน"
+                    }
+                )
+
                 if (type != 3) {
-                    val lbl = listOf("วันครบกำหนด", "วันที่เปิดใช้", "วันที่ซื้อ")[type]
-                    OutlinedButton(onClick = { picker = true }, shape = RectangleShape) { Text("$lbl: ${thai(day)}") }
+                    Lbl(listOf("วันครบกำหนด / หมดอายุ", "วันที่เปิดใช้", "วันที่เริ่มประกัน")[type])
+                    OutlinedButton(onClick = { picker = 1 }, shape = RectangleShape, modifier = Modifier.fillMaxWidth()) { Text(thai(day)) }
+
                     if (type == 1 || type == 2) {
+                        Lbl(if (type == 1) "อายุหลังเปิด (เดือน)" else "ระยะประกัน (เดือน)")
                         OutlinedTextField(
                             months, { months = it.filter { ch -> ch.isDigit() } },
-                            label = { Text(if (type == 1) "อายุหลังเปิด (เดือน)" else "รับประกัน (เดือน)") },
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                            shape = RectangleShape, singleLine = true
+                            shape = RectangleShape, singleLine = true, modifier = Modifier.fillMaxWidth()
                         )
-                        Text((if (type == 1) "จะหมดอายุ: " else "หมดประกัน: ") + thai(due), fontWeight = FontWeight.Bold)
-                    }
-                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        listOf("ไม่ซ้ำ", "ทุกปี", "ทุก 6 เดือน").forEachIndexed { k, t ->
-                            FilterChip(selected = repeat == k, onClick = { repeat = k }, label = { Text(t) }, shape = RectangleShape)
+                        Row(
+                            Modifier.fillMaxWidth().border(1.dp, primary).padding(12.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween
+                        ) {
+                            Text(if (type == 1) "จะหมดอายุ" else "หมดประกัน", color = primary)
+                            Text(thai(due), color = primary, fontWeight = FontWeight.Bold)
                         }
                     }
+
+                    Lbl("ซ้ำ")
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        listOf("ไม่ซ้ำ", "ทุกปี", "ทุก 6 เดือน").forEachIndexed { k, t -> Chip(t, repeat == k) { repeat = k } }
+                    }
+
+                    Lbl("วันที่ชำระ (ถ้ามี)")
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        OutlinedButton(onClick = { picker = 2 }, shape = RectangleShape, modifier = Modifier.weight(1f)) {
+                            Text(if (pay > 0) thai(pay) else "ไม่ระบุ (แตะเพื่อเลือก)")
+                        }
+                        if (pay > 0) TextButton(onClick = { pay = 0L }) { Text("ล้าง") }
+                    }
+                    Hint("เช่น วันจ่ายเบี้ยประกันหรือภาษี จะแจ้งเตือนแยกจากวันหมดอายุ")
                 }
-                OutlinedTextField(details, { details = it }, label = { Text("รายละเอียด / ค่าใช้จ่าย") }, shape = RectangleShape)
+
+                Lbl("รายละเอียด / ค่าใช้จ่าย")
+                OutlinedTextField(details, { details = it }, shape = RectangleShape, modifier = Modifier.fillMaxWidth())
+
                 Row(Modifier.fillMaxWidth().clickable { widget = !widget }, verticalAlignment = Alignment.CenterVertically) {
                     Checkbox(checked = widget, onCheckedChange = { widget = it })
                     Text("แสดงใน widget")
@@ -406,7 +484,8 @@ fun AddDialog(initial: Item?, cats: List<String>, onClose: () -> Unit, onSave: (
                         type = if (type == 3) 0 else type, baseDay = day, months = m,
                         repeat = if (type == 3) 0 else repeat, details = details,
                         done = initial?.done ?: false, hasDate = type != 3,
-                        widget = widget, doneAt = initial?.doneAt ?: 0L
+                        widget = widget, doneAt = initial?.doneAt ?: 0L,
+                        payDay = if (type == 3) 0L else pay
                     )
                 )
             }) { Text("บันทึก") }
@@ -414,14 +493,15 @@ fun AddDialog(initial: Item?, cats: List<String>, onClose: () -> Unit, onSave: (
         dismissButton = { TextButton(onClick = onClose) { Text("ยกเลิก") } }
     )
 
-    if (picker) {
-        val st = rememberDatePickerState(initialSelectedDateMillis = day * 86_400_000L)
+    if (picker != 0) {
+        val start = if (picker == 2) (if (pay > 0) pay else due) else day
+        val st = rememberDatePickerState(initialSelectedDateMillis = start * 86_400_000L)
         DatePickerDialog(
-            onDismissRequest = { picker = false },
+            onDismissRequest = { picker = 0 },
             confirmButton = {
                 TextButton(onClick = {
-                    st.selectedDateMillis?.let { day = it / 86_400_000L }
-                    picker = false
+                    st.selectedDateMillis?.let { ms -> if (picker == 2) pay = ms / 86_400_000L else day = ms / 86_400_000L }
+                    picker = 0
                 }) { Text("ตกลง") }
             }
         ) { DatePicker(state = st) }
