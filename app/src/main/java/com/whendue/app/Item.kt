@@ -61,7 +61,7 @@ fun roll(i: Item): Item {
         val m = if (i.repeat == 1) 12L else 6L
         val next = LocalDate.ofEpochDay(i.dueDay).plusMonths(m).toEpochDay()
         val pay = if (i.payDay > 0) LocalDate.ofEpochDay(i.payDay).plusMonths(m).toEpochDay() else 0L
-        return i.copy(type = 0, baseDay = next, payDay = pay)
+        return i.copy(type = if (i.type == 3) 3 else 0, baseDay = next, payDay = pay)
     }
     return i.copy(done = true, doneAt = LocalDate.now().toEpochDay())
 }

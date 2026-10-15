@@ -4,13 +4,18 @@ package com.whendue.app
 
 import android.Manifest
 import android.app.TimePickerDialog
+import android.graphics.BitmapFactory
 import android.os.Build
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -24,12 +29,19 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.RectangleShape
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
@@ -38,6 +50,26 @@ import java.time.LocalDate
 
 val GRAY = Color(0xFF525252)
 val LINE = Color(0xFFE5E5E5)
+val BORDER = Color(0xFFD4D4D4)
+val INK = Color(0xFF111111)
+val RED = Color(0xFFB3261E)
+
+val TYPE_SHORT = listOf("วันบนฉลาก", "นับจากเปิดใช้", "ประกัน", "วันที่ชำระ", "โน้ต")
+val TYPE_FULL = listOf("วันบนฉลาก", "นับจากเปิดใช้", "ประกัน / รับประกัน", "วันที่ชำระ", "โน้ต (ไม่มีวันที่)")
+val TYPE_DESC = listOf(
+    "วันหมดอายุที่พิมพ์บนฉลาก",
+    "วันที่เปิดใช้ + อายุหลังเปิด (PAO)",
+    "วันที่เริ่มประกัน + ระยะประกัน",
+    "วันจ่ายเบี้ย ภาษี ค่างวด",
+    "จดไว้ ไม่มีวันที่"
+)
+val REPEATS = listOf("ครั้งเดียว", "ทุกปี", "ทุก 6 เดือน")
+val MONTH_FULL = listOf(
+    "มกราคม", "กุมภาพันธ์", "มีนาคม", "เมษายน", "พฤษภาคม", "มิถุนายน",
+    "กรกฎาคม", "สิงหาคม", "กันยายน", "ตุลาคม", "พฤศจิกายน", "ธันวาคม"
+)
+
+fun fmtMonths(m: Int): String = if (m >= 12 && m % 12 == 0) "${m / 12} ปี" else "$m เดือน"
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -50,6 +82,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+// ---------- แอปหลัก ----------
 @Composable
 fun App() {
     val c = LocalContext.current
@@ -59,8 +92,9 @@ fun App() {
     var time by remember { mutableStateOf(Prefs.hour(c) * 60 + Prefs.minute(c)) }
     var theme by remember { mutableStateOf(Prefs.theme(c)) }
     var tab by remember { mutableStateOf(0) }
-    var adding by remember { mutableStateOf(false) }
-    var editing by remember { mutableStateOf<Item?>(null) }
+    var detailId by remember { mutableStateOf<Long?>(null) }
+    var form by remember { mutableStateOf(false) }
+    var formItem by remember { mutableStateOf<Item?>(null) }
 
     fun commit(l: List<Item>) {
         all = l
@@ -75,6 +109,13 @@ fun App() {
         WidgetProvider.refresh(c); Notify.schedule(c)
     }
 
+    fun openForm(i: Item?) {
+        formItem = i
+        form = true
+    }
+
+    val detail = all.firstOrNull { it.id == detailId }
+
     MaterialTheme(
         colorScheme = lightColorScheme(
             primary = Color(THEME_COLORS[theme]), onPrimary = Color.White,
@@ -86,39 +127,91 @@ fun App() {
         )
     ) {
         Surface(Modifier.fillMaxSize(), color = Color.White) {
-            Column(Modifier.fillMaxSize()) {
-                Box(Modifier.weight(1f)) {
-                    when (tab) {
-                        0 -> Home(all, { n -> commit(all.map { if (it.id == n.id) roll(n) else it }) }, { editing = it }, { adding = true })
-                        1 -> Archive(
-                            all.filter { it.done },
-                            { r -> commit(all.map { if (it.id == r.id) r.copy(done = false, doneAt = 0L) else it }) },
-                            { r -> commit(all.filter { it.id != r.id }) }
-                        )
-                        else -> SettingsTab(
-                            cats, { Prefs.setCats(c, it); cats = it },
-                            leads, { Prefs.setLeads(c, it); leads = it },
-                            time, { Prefs.setTime(c, it / 60, it % 60); time = it; Notify.schedule(c) },
-                            theme, { Prefs.setTheme(c, it); theme = it; WidgetProvider.refresh(c) },
-                            { reload() }
+            Box(Modifier.fillMaxSize()) {
+                Column(Modifier.fillMaxSize()) {
+                    Box(Modifier.weight(1f)) {
+                        when (tab) {
+                            0 -> Home(all, { detailId = it.id }, { openForm(null) }, { openForm(it) })
+                            1 -> Archive(
+                                all.filter { it.done },
+                                { r -> commit(all.map { if (it.id == r.id) r.copy(done = false, doneAt = 0L) else it }) },
+                                { r -> commit(all.filter { it.id != r.id }) }
+                            )
+                            else -> SettingsTab(
+                                cats, { Prefs.setCats(c, it); cats = it },
+                                leads, { Prefs.setLeads(c, it); leads = it },
+                                time, { Prefs.setTime(c, it / 60, it % 60); time = it; Notify.schedule(c) },
+                                theme, { Prefs.setTheme(c, it); theme = it; WidgetProvider.refresh(c) },
+                                { reload() }
+                            )
+                        }
+                    }
+                    TabBar(tab) { tab = it }
+                }
+                if (detail != null) {
+                    BackHandler { detailId = null }
+                    Surface(Modifier.fillMaxSize(), color = Color.White) {
+                        DetailScreen(
+                            detail, leads,
+                            onEdit = { openForm(detail) },
+                            onRenew = {
+                                val next = LocalDate.ofEpochDay(detail.baseDay).plusMonths(12).toEpochDay()
+                                commit(all.map { if (it.id == detail.id) detail.copy(baseDay = next) else it })
+                                Toast.makeText(c, "ต่ออายุ +1 ปี แล้ว", Toast.LENGTH_SHORT).show()
+                            },
+                            onDone = { commit(all.map { if (it.id == detail.id) roll(detail) else it }); detailId = null },
+                            onDelete = { commit(all.filter { it.id != detail.id }); detailId = null }
                         )
                     }
                 }
-                TabBar(tab) { tab = it }
-            }
-            if (adding || editing != null) {
-                val e = editing
-                AddDialog(
-                    initial = e, cats = cats,
-                    onClose = { adding = false; editing = null },
-                    onSave = { n ->
-                        commit(if (e == null) all + n else all.map { if (it.id == n.id) n else it })
-                        adding = false; editing = null
-                    },
-                    onDelete = if (e != null) fun() { commit(all.filter { it.id != e.id }); editing = null } else null
-                )
+                if (form) {
+                    BackHandler { form = false }
+                    Surface(Modifier.fillMaxSize(), color = Color.White) {
+                        FormScreen(
+                            initial = formItem, cats = cats, leads = leads,
+                            onClose = { form = false },
+                            onSave = { n ->
+                                commit(if (all.any { it.id == n.id }) all.map { if (it.id == n.id) n else it } else all + n)
+                                form = false
+                            }
+                        )
+                    }
+                }
             }
         }
+    }
+}
+
+// ---------- ส่วนประกอบเล็ก ----------
+@Composable
+fun CalIcon() {
+    Canvas(Modifier.size(22.dp)) {
+        val s = size.width
+        val w = 2.dp.toPx()
+        drawRect(color = INK, topLeft = Offset(s * 0.125f, s * 0.21f), size = Size(s * 0.75f, s * 0.67f), style = Stroke(width = w))
+        drawLine(INK, Offset(s * 0.125f, s * 0.42f), Offset(s * 0.875f, s * 0.42f), strokeWidth = w)
+        drawLine(INK, Offset(s * 0.33f, s * 0.12f), Offset(s * 0.33f, s * 0.29f), strokeWidth = w)
+        drawLine(INK, Offset(s * 0.67f, s * 0.12f), Offset(s * 0.67f, s * 0.29f), strokeWidth = w)
+    }
+}
+
+@Composable
+fun ChevIcon() {
+    Canvas(Modifier.size(22.dp)) {
+        val s = size.width
+        val w = 2.dp.toPx()
+        drawLine(INK, Offset(s * 0.25f, s * 0.38f), Offset(s * 0.5f, s * 0.62f), strokeWidth = w)
+        drawLine(INK, Offset(s * 0.5f, s * 0.62f), Offset(s * 0.75f, s * 0.38f), strokeWidth = w)
+    }
+}
+
+@Composable
+fun CamIcon() {
+    Canvas(Modifier.size(22.dp)) {
+        val s = size.width
+        val w = 2.dp.toPx()
+        drawRect(color = INK, topLeft = Offset(s * 0.1f, s * 0.3f), size = Size(s * 0.8f, s * 0.55f), style = Stroke(width = w))
+        drawCircle(color = INK, radius = s * 0.16f, center = Offset(s * 0.5f, s * 0.57f), style = Stroke(width = w))
     }
 }
 
@@ -133,8 +226,8 @@ fun Chip(label: String, selected: Boolean = false, onClick: () -> Unit) {
 }
 
 @Composable
-fun Lbl(t: String) {
-    Text(t, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = GRAY, modifier = Modifier.padding(top = 6.dp))
+fun Lab(t: String) {
+    Text(t, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = GRAY)
 }
 
 @Composable
@@ -151,16 +244,15 @@ fun Tag(t: String, col: Color) {
 }
 
 @Composable
-fun TabBar(sel: Int, onSel: (Int) -> Unit) {
-    Column(Modifier.navigationBarsPadding()) {
-        Box(Modifier.fillMaxWidth().height(1.dp).background(LINE))
-        Row(Modifier.fillMaxWidth()) {
-            listOf("รายการ", "ที่เก็บถาวร", "ตั้งค่า").forEachIndexed { k, t ->
-                Box(Modifier.weight(1f).height(56.dp).clickable { onSel(k) }, contentAlignment = Alignment.Center) {
-                    Text(t, fontWeight = if (sel == k) FontWeight.Bold else FontWeight.Normal, color = if (sel == k) Color.Black else GRAY)
-                    if (sel == k) Box(Modifier.align(Alignment.TopCenter).fillMaxWidth().height(2.dp).background(MaterialTheme.colorScheme.primary))
-                }
-            }
+fun Select(label: String, value: String, modifier: Modifier = Modifier, cal: Boolean = false, onClick: () -> Unit) {
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Lab(label)
+        Row(
+            Modifier.fillMaxWidth().height(48.dp).border(1.dp, BORDER).clickable(onClick = onClick).padding(horizontal = 12.dp),
+            horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(value, fontSize = 16.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+            if (cal) CalIcon() else ChevIcon()
         }
     }
 }
@@ -175,75 +267,97 @@ fun Heading(t: String) {
 }
 
 @Composable
-fun Home(all: List<Item>, onTick: (Item) -> Unit, onOpen: (Item) -> Unit, onAdd: () -> Unit) {
-    val notes = all.filter { !it.hasDate && !it.done }
-    val dues = all.filter { it.hasDate && !it.done }
-        .sortedBy { if (it.payDay > 0) minOf(it.dueDay, it.payDay) else it.dueDay }
-    Box(Modifier.fillMaxSize()) {
-        LazyColumn(contentPadding = PaddingValues(start = 20.dp, top = 28.dp, end = 20.dp, bottom = 96.dp)) {
-            item {
-                Column {
-                    Text("when due?", fontSize = 28.sp, fontWeight = FontWeight.Bold)
-                    Text("วันนี้ " + thai(LocalDate.now().toEpochDay()), color = GRAY, fontSize = 14.sp)
-                }
-            }
-            if (notes.isNotEmpty()) {
-                item { Heading("ปักหมุด") }
-                items(notes, key = { it.id }) { n -> ItemRow(n, { onTick(n) }, { onOpen(n) }) }
-            }
-            item { Heading("ใกล้หมดอายุ") }
-            if (dues.isEmpty()) item { Text("ยังไม่มีรายการ กด + เพิ่มรายการ", color = GRAY) }
-            items(dues, key = { it.id }) { d -> ItemRow(d, { onTick(d) }, { onOpen(d) }) }
-        }
-        Button(
-            onClick = onAdd, shape = RectangleShape,
-            modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(20.dp).height(52.dp)
-        ) { Text("+ เพิ่มรายการ", fontWeight = FontWeight.SemiBold) }
-    }
-}
-
-@Composable
-fun ItemRow(i: Item, onTick: () -> Unit, onOpen: () -> Unit) {
-    Row(Modifier.fillMaxWidth().clickable { onOpen() }, verticalAlignment = Alignment.CenterVertically) {
-        Checkbox(checked = false, onCheckedChange = { onTick() })
-        Column(Modifier.weight(1f)) {
-            Text(i.name, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
-            Text(if (i.hasDate) "${i.category} · ${thai(i.dueDay)}" else i.category, fontSize = 14.sp, color = GRAY)
-            if (i.hasDate && i.payDay > 0) Text("ชำระ ${thai(i.payDay)}", fontSize = 14.sp, color = GRAY)
-        }
-        if (i.hasDate) {
-            val n = daysLeft(i.dueDay)
-            Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Tag((if (i.payDay > 0) "หมด " else "") + leftText(n), Color(statusColor(n)))
-                if (i.payDay > 0) {
-                    val p = daysLeft(i.payDay)
-                    Tag("ชำระ " + leftText(p), Color(statusColor(p)))
-                }
-            }
+fun Sheet(title: String, onClose: () -> Unit, content: @Composable ColumnScope.() -> Unit) {
+    ModalBottomSheet(
+        onDismissRequest = onClose, shape = RectangleShape, containerColor = Color.White,
+        dragHandle = null, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ) {
+        Column(
+            Modifier.fillMaxWidth().navigationBarsPadding().verticalScroll(rememberScrollState())
+                .padding(start = 20.dp, end = 20.dp, top = 20.dp, bottom = 28.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Text(title, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+            content()
         }
     }
 }
 
 @Composable
-fun Archive(done: List<Item>, onRestore: (Item) -> Unit, onDelete: (Item) -> Unit) {
-    LazyColumn(contentPadding = PaddingValues(start = 20.dp, top = 28.dp, end = 20.dp, bottom = 24.dp)) {
-        item {
-            Column {
-                Text("ที่เก็บถาวร", fontSize = 28.sp, fontWeight = FontWeight.Bold)
-                Text("รายการที่ติ๊กเสร็จและไม่ซ้ำ", color = GRAY, fontSize = 14.sp)
+fun OptionRow(title: String, desc: String? = null, selected: Boolean = false, onClick: () -> Unit) {
+    Column {
+        Row(
+            Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(title, fontSize = 16.sp, fontWeight = if (selected) FontWeight.Bold else FontWeight.SemiBold)
+                if (desc != null) Text(desc, fontSize = 13.sp, color = GRAY)
+            }
+            if (selected) Text("✓", fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+        }
+        Box(Modifier.fillMaxWidth().height(1.dp).background(LINE))
+    }
+}
+
+@Composable
+fun CalendarSheet(initial: Long, onPick: (Long) -> Unit, onClose: () -> Unit) {
+    var sel by remember { mutableStateOf(initial) }
+    var month by remember { mutableStateOf(LocalDate.ofEpochDay(initial).withDayOfMonth(1)) }
+    val primary = MaterialTheme.colorScheme.primary
+    fun setSel(d: Long) {
+        sel = d
+        month = LocalDate.ofEpochDay(d).withDayOfMonth(1)
+    }
+    Sheet("เลือกวันที่", onClose) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Box(Modifier.size(44.dp).background(Color(0xFFF5F5F5)).clickable { month = month.minusMonths(1) }, contentAlignment = Alignment.Center) { Text("‹", fontSize = 22.sp) }
+            Text("${MONTH_FULL[month.monthValue - 1]} ${month.year + 543}", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+            Box(Modifier.size(44.dp).background(Color(0xFFF5F5F5)).clickable { month = month.plusMonths(1) }, contentAlignment = Alignment.Center) { Text("›", fontSize = 22.sp) }
+        }
+        Row(Modifier.fillMaxWidth()) {
+            listOf("อา", "จ", "อ", "พ", "พฤ", "ศ", "ส").forEach {
+                Text(it, Modifier.weight(1f), textAlign = TextAlign.Center, fontSize = 13.sp, color = GRAY, fontWeight = FontWeight.SemiBold)
             }
         }
-        if (done.isEmpty()) item { Text("ยังไม่มีรายการ", color = GRAY, modifier = Modifier.padding(top = 16.dp)) }
-        items(done, key = { it.id }) { d ->
-            Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text(d.name, fontSize = 16.sp, color = Color(0xFF737373), textDecoration = TextDecoration.LineThrough)
-                    if (d.doneAt > 0) Text("ทำแล้ว " + thai(d.doneAt), fontSize = 14.sp, color = GRAY)
+        val offset = month.dayOfWeek.value % 7
+        val len = month.lengthOfMonth()
+        val rows = (offset + len + 6) / 7
+        for (r in 0 until rows) {
+            Row(Modifier.fillMaxWidth()) {
+                for (k in 0 until 7) {
+                    val d = r * 7 + k - offset + 1
+                    val valid = d in 1..len
+                    val picked = valid && month.withDayOfMonth(d).toEpochDay() == sel
+                    Box(
+                        Modifier.weight(1f).height(44.dp)
+                            .then(if (picked) Modifier.background(primary) else Modifier)
+                            .clickable(enabled = valid) { sel = month.withDayOfMonth(d).toEpochDay() },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        if (valid) Text("$d", fontSize = 16.sp, color = if (picked) Color.White else INK, fontWeight = if (picked) FontWeight.Bold else FontWeight.Normal)
+                    }
                 }
-                TextButton(onClick = { onRestore(d) }) { Text("กู้คืน") }
-                TextButton(onClick = { onDelete(d) }) { Text("ลบ", color = Color(0xFFB3261E)) }
             }
         }
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Chip("วันนี้") { setSel(LocalDate.now().toEpochDay()) }
+            Chip("+1 เดือน") { setSel(LocalDate.ofEpochDay(sel).plusMonths(1).toEpochDay()) }
+            Chip("+6 เดือน") { setSel(LocalDate.ofEpochDay(sel).plusMonths(6).toEpochDay()) }
+            Chip("+1 ปี") { setSel(LocalDate.ofEpochDay(sel).plusYears(1).toEpochDay()) }
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = onClose, shape = RectangleShape, modifier = Modifier.weight(1f).height(52.dp), border = BorderStroke(1.dp, INK), colors = ButtonDefaults.outlinedButtonColors(contentColor = INK)) { Text("ยกเลิก", fontWeight = FontWeight.SemiBold) }
+            Button(onClick = { onPick(sel) }, shape = RectangleShape, modifier = Modifier.weight(1f).height(52.dp)) { Text("ตกลง", fontWeight = FontWeight.SemiBold) }
+        }
+    }
+}
+
+@Composable
+fun MonthsSheet(title: String, options: List<Int>, current: Int, onPick: (Int) -> Unit, onCustom: () -> Unit, onClose: () -> Unit) {
+    Sheet(title, onClose) {
+        options.forEach { m -> OptionRow(fmtMonths(m), selected = m == current) { onPick(m) } }
+        OptionRow("กำหนดเอง…") { onCustom() }
     }
 }
 
@@ -265,13 +379,418 @@ fun Prompt(
         confirmButton = { TextButton(onClick = { if (v.isNotBlank()) onOk(v.trim()) }) { Text("ตกลง") } },
         dismissButton = {
             Row {
-                if (onDelete != null) TextButton(onClick = onDelete) { Text("ลบ", color = Color(0xFFB3261E)) }
+                if (onDelete != null) TextButton(onClick = onDelete) { Text("ลบ", color = RED) }
                 TextButton(onClick = onClose) { Text("ยกเลิก") }
             }
         }
     )
 }
 
+// ---------- หน้าแรก ----------
+fun quicks(): List<Pair<String, Item>> {
+    val t = LocalDate.now().toEpochDay()
+    fun mk(n: String, cat: String, type: Int, repeat: Int = 0) = Item(
+        id = 0, name = n, category = cat, type = type, baseDay = t, months = 12,
+        repeat = repeat, details = "", done = false, hasDate = true
+    )
+    return listOf(
+        "พ.ร.บ." to mk("พ.ร.บ. รถ", "รถ", 2),
+        "ภาษีที่ดิน" to mk("ภาษีที่ดิน", "ภาษี", 3, 1),
+        "ประกันรถ" to mk("ประกันรถยนต์", "ประกัน", 2),
+        "เครื่องสำอาง" to mk("", "เครื่องสำอาง", 1)
+    )
+}
+
+fun subText(i: Item): String = when (i.type) {
+    1 -> "เปิดใช้แล้ว · PAO ${i.months} เดือน"
+    2 -> "ประกันถึง ${thai(i.dueDay)}"
+    3 -> "ชำระ ${thai(i.dueDay)}"
+    else -> "หมด ${thai(i.dueDay)}"
+}
+
+@Composable
+fun Home(all: List<Item>, onOpen: (Item) -> Unit, onAdd: () -> Unit, onQuick: (Item) -> Unit) {
+    val live = all.filter { !it.done }
+    val notes = live.filter { !it.hasDate }
+    val dues = live.filter { it.hasDate }.sortedBy { it.dueDay }
+    Box(Modifier.fillMaxSize()) {
+        if (live.isEmpty()) {
+            Column(Modifier.fillMaxSize().padding(start = 20.dp, top = 28.dp, end = 20.dp, bottom = 96.dp)) {
+                Column {
+                    Text("when due?", fontSize = 28.sp, fontWeight = FontWeight.Bold)
+                    Text("วันนี้ " + thai(LocalDate.now().toEpochDay()), color = GRAY, fontSize = 14.sp)
+                }
+                Column(
+                    Modifier.weight(1f).fillMaxWidth(),
+                    horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center
+                ) {
+                    Text("ยังไม่มีรายการ", fontSize = 20.sp, fontWeight = FontWeight.SemiBold)
+                    Text("เริ่มจากรายการที่ใช้บ่อย หรือเพิ่มเอง", fontSize = 14.sp, color = GRAY)
+                    Spacer(Modifier.height(12.dp))
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) { quicks().forEach { (t, i) -> Chip(t) { onQuick(i) } } }
+                }
+            }
+        } else {
+            LazyColumn(contentPadding = PaddingValues(start = 20.dp, top = 28.dp, end = 20.dp, bottom = 96.dp)) {
+                item {
+                    Column {
+                        Text("when due?", fontSize = 28.sp, fontWeight = FontWeight.Bold)
+                        Text("วันนี้ " + thai(LocalDate.now().toEpochDay()), color = GRAY, fontSize = 14.sp)
+                    }
+                }
+                if (notes.isNotEmpty()) {
+                    item { Heading("ปักหมุด") }
+                    items(notes, key = { it.id }) { n ->
+                        Row(
+                            Modifier.fillMaxWidth().clickable { onOpen(n) }.padding(vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(n.name, Modifier.weight(1f), fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                            Tag(n.category, GRAY)
+                        }
+                    }
+                }
+                if (dues.isNotEmpty()) {
+                    item { Heading("ใกล้หมดอายุ") }
+                    items(dues, key = { it.id }) { d ->
+                        val n = daysLeft(d.dueDay)
+                        Row(
+                            Modifier.fillMaxWidth().clickable { onOpen(d) }.padding(vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text(d.name, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                                Text(subText(d), fontSize = 14.sp, color = GRAY)
+                            }
+                            Tag(leftText(n), Color(statusColor(n)))
+                        }
+                    }
+                }
+            }
+        }
+        Button(
+            onClick = onAdd, shape = RectangleShape,
+            modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().padding(20.dp).height(52.dp)
+        ) { Text("+ เพิ่มรายการ", fontWeight = FontWeight.SemiBold) }
+    }
+}
+
+@Composable
+fun TabBar(sel: Int, onSel: (Int) -> Unit) {
+    Column(Modifier.navigationBarsPadding()) {
+        Box(Modifier.fillMaxWidth().height(1.dp).background(LINE))
+        Row(Modifier.fillMaxWidth()) {
+            listOf("รายการ", "ที่เก็บถาวร", "ตั้งค่า").forEachIndexed { k, t ->
+                Box(Modifier.weight(1f).height(56.dp).clickable { onSel(k) }, contentAlignment = Alignment.Center) {
+                    Text(t, fontWeight = if (sel == k) FontWeight.Bold else FontWeight.Normal, color = if (sel == k) Color.Black else GRAY)
+                    if (sel == k) Box(Modifier.align(Alignment.TopCenter).fillMaxWidth().height(2.dp).background(MaterialTheme.colorScheme.primary))
+                }
+            }
+        }
+    }
+}
+
+// ---------- หน้ารายละเอียด ----------
+@Composable
+fun DetailScreen(
+    i: Item, leads: List<Int>,
+    onEdit: () -> Unit, onRenew: () -> Unit, onDone: () -> Unit, onDelete: () -> Unit
+) {
+    Column(
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState())
+            .padding(start = 20.dp, top = 28.dp, end = 20.dp, bottom = 24.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Text(i.category, fontSize = 14.sp, color = GRAY)
+        Text(i.name, fontSize = 28.sp, fontWeight = FontWeight.Bold)
+        if (i.hasDate) {
+            val n = daysLeft(i.dueDay)
+            val col = Color(statusColor(n))
+            Text(
+                if (n < 0) "เกินกำหนด ${-n} วัน" else if (n == 0L) "วันนี้" else "เหลือ $n วัน",
+                fontSize = 44.sp, fontWeight = FontWeight.Bold, color = col
+            )
+            Text(
+                (when (i.type) { 2 -> "หมดประกัน "; 3 -> "กำหนดชำระ "; else -> "หมดอายุ " }) + thai(i.dueDay),
+                fontSize = 14.sp, color = GRAY
+            )
+            val start = if (i.type == 1 || i.type == 2) i.baseDay else i.id / 86_400_000L
+            val total = (i.dueDay - start).coerceAtLeast(1)
+            val frac = ((LocalDate.now().toEpochDay() - start).toFloat() / total).coerceIn(0f, 1f)
+            Box(Modifier.fillMaxWidth().height(4.dp).background(LINE)) {
+                Box(Modifier.fillMaxWidth(frac).height(4.dp).background(col))
+            }
+            Heading("เตือนล่วงหน้า")
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                leads.sortedDescending().forEach { d ->
+                    val passed = n <= d
+                    Tag("$d วัน · " + if (passed) "แล้ว" else "รอเตือน", if (passed) Color(0xFF1F6F43) else GRAY)
+                }
+            }
+        }
+        Heading("รายละเอียด")
+        Text(if (i.details.isBlank()) "-" else i.details, fontSize = 14.sp)
+        Spacer(Modifier.height(12.dp))
+        if (i.hasDate) {
+            Button(onClick = onRenew, shape = RectangleShape, modifier = Modifier.fillMaxWidth().height(52.dp)) { Text("ต่ออายุ +1 ปี", fontWeight = FontWeight.SemiBold) }
+        }
+        OutlinedButton(
+            onClick = onEdit, shape = RectangleShape, modifier = Modifier.fillMaxWidth().height(48.dp),
+            border = BorderStroke(1.dp, INK), colors = ButtonDefaults.outlinedButtonColors(contentColor = INK)
+        ) { Text("แก้ไข", fontWeight = FontWeight.SemiBold) }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            TextButton(onClick = onDone) { Text(if (i.hasDate && i.repeat > 0) "เสร็จแล้ว (เลื่อนรอบถัดไป)" else "เสร็จแล้ว (เก็บถาวร)") }
+            TextButton(onClick = onDelete) { Text("ลบ", color = RED) }
+        }
+    }
+}
+
+// ---------- ฟอร์มเพิ่ม/แก้ไข ----------
+@Composable
+fun FormScreen(initial: Item?, cats: List<String>, leads: List<Int>, onClose: () -> Unit, onSave: (Item) -> Unit) {
+    val c = LocalContext.current
+    var name by remember { mutableStateOf(initial?.name ?: "") }
+    var cat by remember { mutableStateOf(initial?.category ?: cats.firstOrNull() ?: "อื่นๆ") }
+    var ui by remember { mutableStateOf(if (initial != null && !initial.hasDate) 4 else initial?.type ?: 0) }
+    var day by remember { mutableStateOf(initial?.baseDay ?: LocalDate.now().toEpochDay()) }
+    var months by remember { mutableStateOf(initial?.months ?: 12) }
+    var repeat by remember { mutableStateOf(initial?.repeat ?: 0) }
+    var details by remember { mutableStateOf(initial?.details ?: "") }
+    var widget by remember { mutableStateOf(initial?.widget ?: true) }
+    var sheet by remember { mutableStateOf(0) } // 1 หมวด 2 ชนิดวัน 3 วันที่ 4 ครบกำหนด 5 เดือน 6 เดือนกำหนดเอง
+    var scanR by remember { mutableStateOf<ScanResult?>(null) }
+    var scanTick by remember { mutableStateOf(0) }
+
+    val scanFile = remember { File(c.cacheDir, "scan.jpg") }
+    val scanUri = remember { FileProvider.getUriForFile(c, c.packageName + ".fp", scanFile) }
+    val takePic = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { ok ->
+        if (ok) {
+            Toast.makeText(c, "กำลังอ่านฉลาก…", Toast.LENGTH_SHORT).show()
+            Scan.run(c, scanUri, { r -> scanR = r; scanTick++ }, {
+                Toast.makeText(c, "สแกนไม่สำเร็จ กรอกเองได้เลย", Toast.LENGTH_LONG).show()
+            })
+        }
+    }
+
+    val due = if (ui == 1 || ui == 2) LocalDate.ofEpochDay(day).plusMonths(months.toLong()).toEpochDay() else day
+    val primary = MaterialTheme.colorScheme.primary
+    val dateLabel = listOf("วันหมดอายุ", "วันที่เปิดใช้", "วันที่เริ่มประกัน", "วันที่ชำระ")[ui.coerceAtMost(3)]
+
+    Column(Modifier.fillMaxSize()) {
+        Column(
+            Modifier.weight(1f).verticalScroll(rememberScrollState())
+                .padding(start = 20.dp, top = 28.dp, end = 20.dp, bottom = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Text(if (initial != null && initial.id > 0) "แก้ไขรายการ" else "เพิ่มรายการ", fontSize = 28.sp, fontWeight = FontWeight.Bold)
+            OutlinedButton(
+                onClick = { takePic.launch(scanUri) }, shape = RectangleShape,
+                modifier = Modifier.fillMaxWidth().height(48.dp),
+                border = BorderStroke(1.dp, INK), colors = ButtonDefaults.outlinedButtonColors(contentColor = INK)
+            ) {
+                CamIcon()
+                Spacer(Modifier.width(8.dp))
+                Text("สแกนฉลากด้วยกล้อง", fontWeight = FontWeight.SemiBold)
+            }
+
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Lab("ชื่อรายการ")
+                OutlinedTextField(
+                    name, { name = it }, placeholder = { Text("เช่น พ.ร.บ. รถ, ครีมกันแดด") },
+                    shape = RectangleShape, singleLine = true, modifier = Modifier.fillMaxWidth()
+                )
+            }
+
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                Select("หมวด", cat, Modifier.weight(1f)) { sheet = 1 }
+                Select("ชนิดวัน", TYPE_SHORT[ui], Modifier.weight(1f)) { sheet = 2 }
+            }
+
+            if (ui == 0 || ui == 3) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Select(dateLabel, thai(day), Modifier.weight(1f), cal = true) { sheet = 3 }
+                    Select("ครบกำหนด", REPEATS[repeat], Modifier.weight(1f)) { sheet = 4 }
+                }
+            }
+            if (ui == 1 || ui == 2) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Select(dateLabel, thai(day), Modifier.weight(1f), cal = true) { sheet = 3 }
+                    Select(
+                        if (ui == 1) "อายุหลังเปิด" else "ระยะประกัน",
+                        if (ui == 1) "$months เดือน" else fmtMonths(months), Modifier.weight(1f)
+                    ) { sheet = 5 }
+                }
+                Row(
+                    Modifier.fillMaxWidth().border(1.dp, primary).padding(12.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(if (ui == 1) "จะหมดอายุ" else "หมดประกัน", color = primary)
+                    Text(thai(due), color = primary, fontWeight = FontWeight.Bold)
+                }
+            }
+
+            Select("เตือนล่วงหน้า", "ตามค่าเริ่มต้น · " + leads.sortedDescending().joinToString(", ") + " วัน", Modifier.fillMaxWidth()) {
+                Toast.makeText(c, "ปรับระยะเตือนได้ที่แท็บตั้งค่า", Toast.LENGTH_SHORT).show()
+            }
+
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Lab("รายละเอียด")
+                OutlinedTextField(
+                    details, { details = it }, placeholder = { Text("ค่าใช้จ่าย โน้ตเพิ่มเติม") },
+                    shape = RectangleShape, minLines = 3, modifier = Modifier.fillMaxWidth()
+                )
+            }
+
+            Row(
+                Modifier.fillMaxWidth().clickable { widget = !widget },
+                horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text("แสดงใน widget", fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                Checkbox(checked = widget, onCheckedChange = { widget = it })
+            }
+        }
+        Button(
+            onClick = {
+                if (name.isBlank()) {
+                    Toast.makeText(c, "ใส่ชื่อรายการก่อน", Toast.LENGTH_SHORT).show()
+                } else onSave(
+                    Item(
+                        id = initial?.id?.takeIf { it > 0 } ?: System.currentTimeMillis(),
+                        name = name.trim(), category = cat, type = if (ui == 4) 0 else ui,
+                        baseDay = day, months = months,
+                        repeat = if (ui == 0 || ui == 3) repeat else 0, details = details,
+                        done = initial?.done ?: false, hasDate = ui != 4,
+                        widget = widget, doneAt = initial?.doneAt ?: 0L
+                    )
+                )
+            },
+            shape = RectangleShape,
+            modifier = Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, bottom = 12.dp).navigationBarsPadding().height(52.dp)
+        ) { Text("บันทึก", fontWeight = FontWeight.SemiBold) }
+    }
+
+    when (sheet) {
+        1 -> Sheet("เลือกหมวด", { sheet = 0 }) {
+            (cats + "อื่นๆ").distinct().forEach { k -> OptionRow(k, selected = k == cat) { cat = k; sheet = 0 } }
+            Hint("เพิ่มหรือแก้หมวดได้ในแท็บตั้งค่า")
+        }
+        2 -> Sheet("เลือกชนิดวัน", { sheet = 0 }) {
+            TYPE_FULL.forEachIndexed { k, t -> OptionRow(t, TYPE_DESC[k], k == ui) { ui = k; sheet = 0 } }
+        }
+        3 -> CalendarSheet(day, { day = it; sheet = 0 }, { sheet = 0 })
+        4 -> Sheet("ครบกำหนด", { sheet = 0 }) {
+            REPEATS.forEachIndexed { k, t -> OptionRow(t, selected = k == repeat) { repeat = k; sheet = 0 } }
+        }
+        5 -> MonthsSheet(
+            if (ui == 1) "อายุหลังเปิด" else "ระยะประกัน",
+            if (ui == 1) listOf(3, 6, 9, 12, 18, 24, 36) else listOf(6, 12, 24, 36, 60),
+            months, { months = it; sheet = 0 }, { sheet = 6 }, { sheet = 0 }
+        )
+        6 -> Prompt(
+            title = "จำนวนเดือน", initial = "", numeric = true,
+            onOk = { v -> v.toIntOrNull()?.let { if (it in 1..120) months = it }; sheet = 0 },
+            onClose = { sheet = 0 }
+        )
+    }
+
+    scanR?.let { r ->
+        BackHandler { scanR = null }
+        Surface(Modifier.fillMaxSize(), color = Color.White) {
+            ScanScreen(
+                r, scanFile.path, scanTick, name, months,
+                onRetake = { scanR = null; takePic.launch(scanUri) },
+                onUse = { n, d, m ->
+                    if (n.isNotBlank()) name = n
+                    day = d; months = m; ui = 0
+                    scanR = null
+                }
+            )
+        }
+    }
+}
+
+// ---------- หน้าผลสแกนฉลาก ----------
+@Composable
+fun ScanScreen(r: ScanResult, path: String, tick: Int, name0: String, months0: Int, onRetake: () -> Unit, onUse: (String, Long, Int) -> Unit) {
+    var name by remember { mutableStateOf(name0) }
+    var day by remember { mutableStateOf(r.day ?: LocalDate.now().toEpochDay()) }
+    var months by remember { mutableStateOf(r.pao ?: months0) }
+    var sheet by remember { mutableStateOf(0) }
+    val bmp = remember(tick) {
+        try {
+            val o = BitmapFactory.Options().apply { inSampleSize = 4 }
+            BitmapFactory.decodeFile(path, o)?.asImageBitmap()
+        } catch (e: Exception) {
+            null
+        }
+    }
+    Column(
+        Modifier.fillMaxSize().padding(start = 20.dp, top = 28.dp, end = 20.dp, bottom = 12.dp).navigationBarsPadding(),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        Text("ผลสแกนฉลาก", fontSize = 28.sp, fontWeight = FontWeight.Bold)
+        Box(Modifier.fillMaxWidth().height(150.dp).border(1.dp, BORDER), contentAlignment = Alignment.Center) {
+            if (bmp != null) Image(bmp, null, Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
+            else Text("ไม่มีภาพตัวอย่าง", color = GRAY, fontSize = 14.sp)
+        }
+        Text("ตรวจสอบก่อนบันทึก", fontSize = 14.sp, color = GRAY)
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Lab("ชื่อสินค้า")
+            OutlinedTextField(name, { name = it }, shape = RectangleShape, singleLine = true, modifier = Modifier.fillMaxWidth())
+        }
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Select("วันหมดอายุ", thai(day), Modifier.weight(1f), cal = true) { sheet = 1 }
+            Select("อายุหลังเปิด (PAO)", "$months เดือน", Modifier.weight(1f)) { sheet = 2 }
+        }
+        Text(
+            if (r.day == null) "อ่านวันที่ไม่ได้ เลือกวันเองได้เลย" else "ปีบนฉลากแปลงเป็น พ.ศ. ให้แล้ว กรุณาตรวจสอบ",
+            fontSize = 14.sp, color = GRAY
+        )
+        Spacer(Modifier.weight(1f))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = onRetake, shape = RectangleShape, modifier = Modifier.weight(1f).height(52.dp), border = BorderStroke(1.dp, INK), colors = ButtonDefaults.outlinedButtonColors(contentColor = INK)) { Text("ถ่ายใหม่", fontWeight = FontWeight.SemiBold) }
+            Button(onClick = { onUse(name.trim(), day, months) }, shape = RectangleShape, modifier = Modifier.weight(1f).height(52.dp)) { Text("ใช้ค่านี้", fontWeight = FontWeight.SemiBold) }
+        }
+    }
+    when (sheet) {
+        1 -> CalendarSheet(day, { day = it; sheet = 0 }, { sheet = 0 })
+        2 -> MonthsSheet("อายุหลังเปิด (PAO)", listOf(3, 6, 9, 12, 18, 24, 36), months, { months = it; sheet = 0 }, { sheet = 3 }, { sheet = 0 })
+        3 -> Prompt(
+            title = "จำนวนเดือน", initial = "", numeric = true,
+            onOk = { v -> v.toIntOrNull()?.let { if (it in 1..120) months = it }; sheet = 0 },
+            onClose = { sheet = 0 }
+        )
+    }
+}
+
+// ---------- ที่เก็บถาวร ----------
+@Composable
+fun Archive(done: List<Item>, onRestore: (Item) -> Unit, onDelete: (Item) -> Unit) {
+    LazyColumn(contentPadding = PaddingValues(start = 20.dp, top = 28.dp, end = 20.dp, bottom = 24.dp)) {
+        item {
+            Column {
+                Text("ที่เก็บถาวร", fontSize = 28.sp, fontWeight = FontWeight.Bold)
+                Text("รายการที่ติ๊กเสร็จและไม่ซ้ำ", color = GRAY, fontSize = 14.sp)
+            }
+        }
+        if (done.isEmpty()) item { Text("ยังไม่มีรายการ", color = GRAY, modifier = Modifier.padding(top = 16.dp)) }
+        items(done, key = { it.id }) { d ->
+            Row(Modifier.fillMaxWidth().padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(d.name, fontSize = 16.sp, color = Color(0xFF737373), textDecoration = TextDecoration.LineThrough)
+                    if (d.doneAt > 0) Text("ทำแล้ว " + thai(d.doneAt), fontSize = 14.sp, color = GRAY)
+                }
+                TextButton(onClick = { onRestore(d) }) { Text("กู้คืน") }
+                TextButton(onClick = { onDelete(d) }) { Text("ลบ", color = RED) }
+            }
+        }
+    }
+}
+
+// ---------- ตั้งค่า ----------
 @Composable
 fun SettingsTab(
     cats: List<String>, onCats: (List<String>) -> Unit,
@@ -362,148 +881,5 @@ fun SettingsTab(
             },
             onClose = { leadPrompt = false }
         )
-    }
-}
-
-@Composable
-fun AddDialog(initial: Item?, cats: List<String>, onClose: () -> Unit, onSave: (Item) -> Unit, onDelete: (() -> Unit)?) {
-    val c = LocalContext.current
-    var name by remember { mutableStateOf(initial?.name ?: "") }
-    var cat by remember { mutableStateOf(initial?.category ?: cats.firstOrNull() ?: "อื่นๆ") }
-    var catMenu by remember { mutableStateOf(false) }
-    var type by remember { mutableStateOf(if (initial != null && !initial.hasDate) 3 else initial?.type ?: 0) }
-    var day by remember { mutableStateOf(initial?.baseDay ?: LocalDate.now().toEpochDay()) }
-    var months by remember { mutableStateOf((initial?.months ?: 12).toString()) }
-    var repeat by remember { mutableStateOf(initial?.repeat ?: 0) }
-    var pay by remember { mutableStateOf(initial?.payDay ?: 0L) }
-    var details by remember { mutableStateOf(initial?.details ?: "") }
-    var widget by remember { mutableStateOf(initial?.widget ?: true) }
-    var picker by remember { mutableStateOf(0) } // 0 = ปิด, 1 = วันหลัก, 2 = วันที่ชำระ
-
-    val scanUri = remember { FileProvider.getUriForFile(c, c.packageName + ".fp", File(c.cacheDir, "scan.jpg")) }
-    val takePic = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { ok ->
-        if (ok) Scan.run(c, scanUri, { r ->
-            r.pao?.let { months = it.toString() }
-            if (r.day != null) {
-                day = r.day; type = 0
-                Toast.makeText(c, "พบวันที่ ${thai(r.day)} กรุณาตรวจสอบก่อนบันทึก", Toast.LENGTH_LONG).show()
-            } else Toast.makeText(c, "อ่านวันที่ไม่ได้ กรอกเองได้เลย", Toast.LENGTH_LONG).show()
-        }, { Toast.makeText(c, "สแกนไม่สำเร็จ กรอกเองได้เลย", Toast.LENGTH_LONG).show() })
-    }
-
-    val m = months.toIntOrNull() ?: 12
-    val due = if (type == 1 || type == 2) LocalDate.ofEpochDay(day).plusMonths(m.toLong()).toEpochDay() else day
-    val primary = MaterialTheme.colorScheme.primary
-
-    AlertDialog(
-        onDismissRequest = onClose, shape = RectangleShape,
-        title = { Text(if (initial == null) "เพิ่มรายการ" else "แก้ไขรายการ") },
-        text = {
-            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                OutlinedButton(onClick = { takePic.launch(scanUri) }, shape = RectangleShape, modifier = Modifier.fillMaxWidth()) { Text("สแกนฉลากด้วยกล้อง") }
-
-                Lbl("ชื่อรายการ")
-                OutlinedTextField(
-                    name, { name = it }, placeholder = { Text("เช่น พ.ร.บ. รถ, ครีมกันแดด") },
-                    shape = RectangleShape, singleLine = true, modifier = Modifier.fillMaxWidth()
-                )
-
-                Lbl("หมวด")
-                Box {
-                    OutlinedButton(onClick = { catMenu = true }, shape = RectangleShape) { Text(cat) }
-                    DropdownMenu(expanded = catMenu, onDismissRequest = { catMenu = false }) {
-                        (cats + "อื่นๆ").distinct().forEach { k -> DropdownMenuItem(text = { Text(k) }, onClick = { cat = k; catMenu = false }) }
-                    }
-                }
-
-                Lbl("ชนิดวัน")
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    listOf("วันบนฉลาก", "นับจากเปิดใช้", "ประกัน / รับประกัน", "โน้ต (ไม่มีวันที่)").forEachIndexed { k, t ->
-                        Chip(t, type == k) { type = k }
-                    }
-                }
-                Hint(
-                    when (type) {
-                        0 -> "วันหมดอายุที่พิมพ์บนฉลาก หรือวันครบกำหนดที่รู้อยู่แล้ว (เช่น ภาษี)"
-                        1 -> "ใส่วันที่เริ่มเปิดใช้ + อายุหลังเปิด (PAO) แอปคำนวณวันหมดให้"
-                        2 -> "ใส่วันที่เริ่มประกัน + ระยะประกัน แอปคำนวณวันหมดให้ ใช้ได้ทั้งประกันภัยและรับประกันสินค้า"
-                        else -> "จดไว้เฉยๆ ไม่มีวันที่และไม่แจ้งเตือน"
-                    }
-                )
-
-                if (type != 3) {
-                    Lbl(listOf("วันครบกำหนด / หมดอายุ", "วันที่เปิดใช้", "วันที่เริ่มประกัน")[type])
-                    OutlinedButton(onClick = { picker = 1 }, shape = RectangleShape, modifier = Modifier.fillMaxWidth()) { Text(thai(day)) }
-
-                    if (type == 1 || type == 2) {
-                        Lbl(if (type == 1) "อายุหลังเปิด (เดือน)" else "ระยะประกัน (เดือน)")
-                        OutlinedTextField(
-                            months, { months = it.filter { ch -> ch.isDigit() } },
-                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                            shape = RectangleShape, singleLine = true, modifier = Modifier.fillMaxWidth()
-                        )
-                        Row(
-                            Modifier.fillMaxWidth().border(1.dp, primary).padding(12.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Text(if (type == 1) "จะหมดอายุ" else "หมดประกัน", color = primary)
-                            Text(thai(due), color = primary, fontWeight = FontWeight.Bold)
-                        }
-                    }
-
-                    Lbl("ซ้ำ")
-                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        listOf("ไม่ซ้ำ", "ทุกปี", "ทุก 6 เดือน").forEachIndexed { k, t -> Chip(t, repeat == k) { repeat = k } }
-                    }
-
-                    Lbl("วันที่ชำระ (ถ้ามี)")
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        OutlinedButton(onClick = { picker = 2 }, shape = RectangleShape, modifier = Modifier.weight(1f)) {
-                            Text(if (pay > 0) thai(pay) else "ไม่ระบุ (แตะเพื่อเลือก)")
-                        }
-                        if (pay > 0) TextButton(onClick = { pay = 0L }) { Text("ล้าง") }
-                    }
-                    Hint("เช่น วันจ่ายเบี้ยประกันหรือภาษี จะแจ้งเตือนแยกจากวันหมดอายุ")
-                }
-
-                Lbl("รายละเอียด / ค่าใช้จ่าย")
-                OutlinedTextField(details, { details = it }, shape = RectangleShape, modifier = Modifier.fillMaxWidth())
-
-                Row(Modifier.fillMaxWidth().clickable { widget = !widget }, verticalAlignment = Alignment.CenterVertically) {
-                    Checkbox(checked = widget, onCheckedChange = { widget = it })
-                    Text("แสดงใน widget")
-                }
-                if (onDelete != null) TextButton(onClick = onDelete) { Text("ลบรายการนี้", color = Color(0xFFB3261E)) }
-            }
-        },
-        confirmButton = {
-            TextButton(onClick = {
-                if (name.isNotBlank()) onSave(
-                    Item(
-                        id = initial?.id ?: System.currentTimeMillis(), name = name.trim(), category = cat,
-                        type = if (type == 3) 0 else type, baseDay = day, months = m,
-                        repeat = if (type == 3) 0 else repeat, details = details,
-                        done = initial?.done ?: false, hasDate = type != 3,
-                        widget = widget, doneAt = initial?.doneAt ?: 0L,
-                        payDay = if (type == 3) 0L else pay
-                    )
-                )
-            }) { Text("บันทึก") }
-        },
-        dismissButton = { TextButton(onClick = onClose) { Text("ยกเลิก") } }
-    )
-
-    if (picker != 0) {
-        val start = if (picker == 2) (if (pay > 0) pay else due) else day
-        val st = rememberDatePickerState(initialSelectedDateMillis = start * 86_400_000L)
-        DatePickerDialog(
-            onDismissRequest = { picker = 0 },
-            confirmButton = {
-                TextButton(onClick = {
-                    st.selectedDateMillis?.let { ms -> if (picker == 2) pay = ms / 86_400_000L else day = ms / 86_400_000L }
-                    picker = 0
-                }) { Text("ตกลง") }
-            }
-        ) { DatePicker(state = st) }
     }
 }
