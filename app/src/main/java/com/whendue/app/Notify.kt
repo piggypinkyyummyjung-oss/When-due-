@@ -33,17 +33,20 @@ object Notify {
         )
         val leads = (Prefs.leads(c).map { it.toLong() } + 0L).toSet()
         val items = Store.load(c).filter { it.hasDate && !it.done }
-        items.filter { daysLeft(it.dueDay) in leads }.forEach {
+        items.filter { daysLeft(it.dueDay) in leadsFor(it, leads) }.forEach {
             val n = daysLeft(it.dueDay)
             val text = if (n == 0L) "ครบกำหนดวันนี้" else "อีก $n วัน (${thai(it.dueDay)})"
             post(c, nm, it.id.toInt(), it.name, text)
         }
-        items.filter { it.payDay > 0 && daysLeft(it.payDay) in leads }.forEach {
+        items.filter { it.payDay > 0 && daysLeft(it.payDay) in leadsFor(it, leads) }.forEach {
             val n = daysLeft(it.payDay)
             val text = if (n == 0L) "ถึงกำหนดชำระวันนี้" else "ชำระอีก $n วัน (${thai(it.payDay)})"
             post(c, nm, it.id.toInt() + 1, it.name, text)
         }
     }
+
+    private fun leadsFor(i: Item, global: Set<Long>): Set<Long> =
+        if (i.customLeads.isNotEmpty()) (i.customLeads.map { it.toLong() } + 0L).toSet() else global
 
     private fun post(c: Context, nm: NotificationManager, id: Int, title: String, text: String) {
         val nb = Notification.Builder(c, CH)
