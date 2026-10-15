@@ -237,6 +237,15 @@ fun Chip(label: String, selected: Boolean = false, onClick: () -> Unit) {
 }
 
 @Composable
+fun PageTitle(t: String) {
+    val primary = MaterialTheme.colorScheme.primary
+    Row(Modifier.fillMaxWidth().height(IntrinsicSize.Min).background(primary.copy(alpha = 0.15f))) {
+        Box(Modifier.width(4.dp).fillMaxHeight().background(primary))
+        Text(t, fontSize = 28.sp, fontWeight = FontWeight.Bold, color = primary, modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp))
+    }
+}
+
+@Composable
 fun Lab(t: String) {
     Text(t, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = GRAY)
 }
@@ -270,11 +279,15 @@ fun Select(label: String, value: String, modifier: Modifier = Modifier, cal: Boo
 }
 
 @Composable
-fun Heading(t: String) {
-    Row(Modifier.padding(top = 16.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.width(3.dp).height(22.dp).background(MaterialTheme.colorScheme.primary))
-        Spacer(Modifier.width(10.dp))
-        Text(t, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+fun Heading(t: String, count: Int? = null) {
+    val primary = MaterialTheme.colorScheme.primary
+    Row(
+        Modifier.fillMaxWidth().padding(top = 16.dp, bottom = 4.dp).height(IntrinsicSize.Min).background(primary.copy(alpha = 0.10f)),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(Modifier.width(3.dp).fillMaxHeight().background(primary))
+        Text(t, Modifier.weight(1f).padding(horizontal = 12.dp, vertical = 8.dp), color = primary, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+        if (count != null) Text("$count", Modifier.padding(end = 12.dp), color = primary, fontSize = 14.sp, fontWeight = FontWeight.Bold)
     }
 }
 
@@ -429,7 +442,7 @@ fun Home(all: List<Item>, onOpen: (Item) -> Unit, onAdd: () -> Unit, onQuick: (I
         if (live.isEmpty()) {
             Column(Modifier.fillMaxSize().padding(start = 20.dp, top = 28.dp, end = 20.dp, bottom = 96.dp)) {
                 Column {
-                    Text("when due?", fontSize = 28.sp, fontWeight = FontWeight.Bold)
+                    PageTitle("When due?")
                     Text("วันนี้ " + thai(LocalDate.now().toEpochDay()), color = GRAY, fontSize = 14.sp)
                 }
                 Column(
@@ -449,12 +462,12 @@ fun Home(all: List<Item>, onOpen: (Item) -> Unit, onAdd: () -> Unit, onQuick: (I
             LazyColumn(contentPadding = PaddingValues(start = 20.dp, top = 28.dp, end = 20.dp, bottom = 96.dp)) {
                 item {
                     Column {
-                        Text("when due?", fontSize = 28.sp, fontWeight = FontWeight.Bold)
+                        PageTitle("When due?")
                         Text("วันนี้ " + thai(LocalDate.now().toEpochDay()), color = GRAY, fontSize = 14.sp)
                     }
                 }
                 if (notes.isNotEmpty()) {
-                    item { Heading("ปักหมุด") }
+                    item { Heading("ปักหมุด", notes.size) }
                     items(notes, key = { it.id }) { n ->
                         Row(
                             Modifier.fillMaxWidth().clickable { onOpen(n) }.padding(vertical = 8.dp),
@@ -466,7 +479,7 @@ fun Home(all: List<Item>, onOpen: (Item) -> Unit, onAdd: () -> Unit, onQuick: (I
                     }
                 }
                 if (dues.isNotEmpty()) {
-                    item { Heading("ใกล้หมดอายุ") }
+                    item { Heading("ใกล้หมดอายุ", dues.size) }
                     items(dues, key = { it.id }) { d ->
                         val n = daysLeft(d.dueDay)
                         Row(
@@ -517,7 +530,7 @@ fun DetailScreen(
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
         Text(i.category, fontSize = 14.sp, color = GRAY)
-        Text(i.name, fontSize = 28.sp, fontWeight = FontWeight.Bold)
+        PageTitle(i.name)
         if (i.hasDate) {
             val n = daysLeft(i.dueDay)
             val col = Color(statusColor(n))
@@ -600,7 +613,7 @@ fun FormScreen(initial: Item?, cats: List<String>, leads: List<Int>, onClose: ()
                 .padding(start = 20.dp, top = 28.dp, end = 20.dp, bottom = 12.dp),
             verticalArrangement = Arrangement.spacedBy(10.dp)
         ) {
-            Text(if (initial != null && initial.id > 0) "แก้ไขรายการ" else "เพิ่มรายการ", fontSize = 28.sp, fontWeight = FontWeight.Bold)
+            PageTitle(if (initial != null && initial.id > 0) "แก้ไขรายการ" else "เพิ่มรายการ")
             OutlinedButton(
                 onClick = { takePic.launch(scanUri) }, shape = RectangleShape,
                 modifier = Modifier.fillMaxWidth().height(48.dp),
@@ -755,7 +768,7 @@ fun ScanScreen(r: ScanResult, path: String, tick: Int, name0: String, months0: I
         Modifier.fillMaxSize().padding(start = 20.dp, top = 28.dp, end = 20.dp, bottom = 12.dp).navigationBarsPadding(),
         verticalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        Text("ผลสแกนฉลาก", fontSize = 28.sp, fontWeight = FontWeight.Bold)
+        PageTitle("ผลสแกนฉลาก")
         Box(Modifier.fillMaxWidth().height(150.dp).border(1.dp, BORDER), contentAlignment = Alignment.Center) {
             if (bmp != null) Image(bmp, null, Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
             else Text("ไม่มีภาพตัวอย่าง", color = GRAY, fontSize = 14.sp)
@@ -796,7 +809,7 @@ fun Archive(done: List<Item>, onRestore: (Item) -> Unit, onDelete: (Item) -> Uni
     LazyColumn(contentPadding = PaddingValues(start = 20.dp, top = 28.dp, end = 20.dp, bottom = 24.dp)) {
         item {
             Column {
-                Text("ที่เก็บถาวร", fontSize = 28.sp, fontWeight = FontWeight.Bold)
+                PageTitle("ที่เก็บถาวร")
                 Text("รายการที่ติ๊กเสร็จและไม่ซ้ำ", color = GRAY, fontSize = 14.sp)
             }
         }
@@ -845,7 +858,7 @@ fun SettingsTab(
         }
     }
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(start = 20.dp, top = 28.dp, end = 20.dp, bottom = 24.dp)) {
-        Text("ตั้งค่า", fontSize = 28.sp, fontWeight = FontWeight.Bold)
+        PageTitle("ตั้งค่า")
 
         Heading("หมวดของฉัน")
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
