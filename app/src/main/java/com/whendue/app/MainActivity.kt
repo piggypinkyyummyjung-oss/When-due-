@@ -71,6 +71,17 @@ val MONTH_FULL = listOf(
 
 fun fmtMonths(m: Int): String = if (m >= 12 && m % 12 == 0) "${m / 12} ปี" else "$m เดือน"
 
+// ระยะเตือนล่วงหน้า เก็บเป็นจำนวนวัน (1 เดือน = 30 วัน, 1 ปี = 365 วัน)
+fun fmtLead(d: Int): String = when {
+    d >= 365 && d % 365 == 0 -> "${d / 365} ปี"
+    d >= 30 && d % 30 == 0 -> "${d / 30} เดือน"
+    else -> "$d วัน"
+}
+
+fun fmtLeads(l: List<Int>): String = l.sortedDescending().joinToString(", ") { fmtLead(it) }
+
+val LEAD_PRESETS = listOf(1, 3, 7, 14, 30, 90, 180, 365)
+
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -529,7 +540,7 @@ fun DetailScreen(
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 (if (i.customLeads.isNotEmpty()) i.customLeads else leads).sortedDescending().forEach { d ->
                     val passed = n <= d
-                    Tag("$d วัน · " + if (passed) "แล้ว" else "รอเตือน", if (passed) Color(0xFF1F6F43) else GRAY)
+                    Tag(fmtLead(d) + " · " + if (passed) "แล้ว" else "รอเตือน", if (passed) Color(0xFF1F6F43) else GRAY)
                 }
             }
         }
@@ -638,8 +649,8 @@ fun FormScreen(initial: Item?, cats: List<String>, leads: List<Int>, onClose: ()
 
             Select(
                 "เตือนล่วงหน้า",
-                if (remind.isEmpty()) "ตามค่าเริ่มต้น (" + leads.sortedDescending().joinToString(", ") + " วัน)"
-                else remind.sortedDescending().joinToString(", ") + " วัน",
+                if (remind.isEmpty()) "ตามค่าเริ่มต้น (" + fmtLeads(leads) + ")"
+                else fmtLeads(remind),
                 Modifier.fillMaxWidth()
             ) { sheet = 8 }
 
@@ -846,7 +857,7 @@ fun SettingsTab(
         Heading("การเตือน")
         Hint("เตือนล่วงหน้า (แตะเพื่อเอาออก)")
         FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            leads.forEach { d -> Chip("$d วัน ✕", true) { if (leads.size > 1) onLeads(leads - d) } }
+            leads.forEach { d -> Chip(fmtLead(d) + " ✕", true) { if (leads.size > 1) onLeads(leads - d) } }
             Chip("+ เพิ่ม") { leadPrompt = true }
         }
         Spacer(Modifier.height(8.dp))
@@ -886,12 +897,8 @@ fun SettingsTab(
         )
     }
     if (leadPrompt) {
-        Prompt(
-            title = "เตือนล่วงหน้า (วัน)", initial = "", numeric = true,
-            onOk = { v ->
-                v.toIntOrNull()?.let { if (it in 1..365) onLeads((leads + it).distinct().sortedDescending()) }
-                leadPrompt = false
-            },
+        LeadDialog(
+            onOk = { d -> onLeads((leads + d).distinct().sortedDescending()); leadPrompt = false },
             onClose = { leadPrompt = false }
         )
     }
@@ -930,29 +937,69 @@ fun RepeatDialog(n0: Int, u0: Int, onOk: (Int, Int) -> Unit, onClose: () -> Unit
 @Composable
 fun RemindSheet(current: List<Int>, defaults: List<Int>, onOk: (List<Int>) -> Unit, onClose: () -> Unit) {
     var useDefault by remember { mutableStateOf(current.isEmpty()) }
-    var sel by remember { mutableStateOf(current.ifEmpty { defaults }) }
+    var sel by remember { mutableStateOf(current) }
     var custom by remember { mutableStateOf(false) }
-    val options = (listOf(60, 30, 14, 7, 3, 1) + sel).distinct().sortedDescending()
+    val options = (LEAD_PRESETS + sel).distinct().sorted()
     Sheet("เตือนล่วงหน้า", onClose) {
-        OptionRow("ตามค่าเริ่มต้น (" + defaults.sortedDescending().joinToString(", ") + " วัน)", "ใช้ค่าจากแท็บตั้งค่า", useDefault) { useDefault = true }
-        OptionRow("กำหนดเอง", "เลือกเองว่าจะเตือนกี่วันก่อนครบกำหนด", !useDefault) { useDefault = false }
-        if (!useDefault) {
-            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                options.forEach { d -> Chip("$d วัน", d in sel) { sel = if (d in sel) sel - d else sel + d } }
-                Chip("+ เพิ่ม") { custom = true }
+        OptionRow("ตามค่าเริ่มต้น (" + fmtLeads(defaults) + ")", "ใช้ค่าจากแท็บตั้งค่า", useDefault) { useDefault = true }
+        Lab("หรือเลือกเอง (เลือกได้หลายอัน)")
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            options.forEach { d ->
+                Chip(fmtLead(d), !useDefault && d in sel) {
+                    if (useDefault) {
+                        useDefault = false
+                        sel = listOf(d)
+                    } else {
+                        sel = if (d in sel) sel - d else sel + d
+                    }
+                }
             }
-            Hint("วันครบกำหนดจะเตือนให้เสมอ")
+            Chip("กำหนดเอง…") { custom = true }
         }
+        Hint("วันครบกำหนดจะเตือนให้เสมอ")
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(onClick = onClose, shape = RectangleShape, modifier = Modifier.weight(1f).height(52.dp), border = BorderStroke(1.dp, INK), colors = ButtonDefaults.outlinedButtonColors(contentColor = INK)) { Text("ยกเลิก", fontWeight = FontWeight.SemiBold) }
             Button(onClick = { onOk(if (useDefault || sel.isEmpty()) emptyList() else sel.sortedDescending()) }, shape = RectangleShape, modifier = Modifier.weight(1f).height(52.dp)) { Text("ตกลง", fontWeight = FontWeight.SemiBold) }
         }
     }
     if (custom) {
-        Prompt(
-            title = "เตือนล่วงหน้า (วัน)", initial = "", numeric = true,
-            onOk = { v -> v.toIntOrNull()?.let { if (it in 1..365) sel = (sel + it).distinct() }; custom = false },
+        LeadDialog(
+            onOk = { d ->
+                sel = (sel + d).distinct()
+                useDefault = false
+                custom = false
+            },
             onClose = { custom = false }
         )
     }
+}
+
+@Composable
+fun LeadDialog(onOk: (Int) -> Unit, onClose: () -> Unit) {
+    var n by remember { mutableStateOf("") }
+    var u by remember { mutableStateOf(0) } // 0 วัน, 1 เดือน, 2 ปี
+    AlertDialog(
+        onDismissRequest = onClose, shape = RectangleShape,
+        title = { Text("เตือนก่อนครบกำหนด") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedTextField(
+                    n, { n = it.filter { ch -> ch.isDigit() } }, singleLine = true, shape = RectangleShape,
+                    placeholder = { Text("จำนวน") },
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+                    modifier = Modifier.width(140.dp)
+                )
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf("วัน" to 0, "เดือน" to 1, "ปี" to 2).forEach { (t, k) -> Chip(t, u == k) { u = k } }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = {
+                val d = (n.toIntOrNull() ?: 0) * listOf(1, 30, 365)[u]
+                if (d in 1..1100) onOk(d)
+            }) { Text("ตกลง") }
+        },
+        dismissButton = { TextButton(onClick = onClose) { Text("ยกเลิก") } }
+    )
 }
