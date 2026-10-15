@@ -20,6 +20,19 @@ class WidgetProvider : AppWidgetProvider() {
     }
 
     companion object {
+        // ผสมสีธีมกับสีขาว (t = สัดส่วนสีธีม)
+        private fun mix(c: Int, t: Float): Int = Color.rgb(
+            (Color.red(c) * t + 255 * (1 - t)).toInt(),
+            (Color.green(c) * t + 255 * (1 - t)).toInt(),
+            (Color.blue(c) * t + 255 * (1 - t)).toInt()
+        )
+
+        private fun tagBg(n: Long): Int = when {
+            n <= 7 -> 0xFFFBE9E7.toInt()
+            n <= 30 -> 0xFFFBF1DC.toInt()
+            else -> 0xFFE6F2EB.toInt()
+        }
+
         fun refresh(c: Context) {
             val m = AppWidgetManager.getInstance(c)
             val ids = m.getAppWidgetIds(ComponentName(c, WidgetProvider::class.java))
@@ -43,7 +56,9 @@ class WidgetProvider : AppWidgetProvider() {
             )
             for (id in ids) {
                 val rv = RemoteViews(c.packageName, R.layout.widget)
-                rv.setTextColor(R.id.wtitle, col)
+                rv.setInt(R.id.whead, "setBackgroundColor", col)
+                rv.setInt(R.id.wstripe, "setBackgroundColor", mix(col, 0.35f))
+                rv.setTextViewText(R.id.wdate, thai(today).substringBeforeLast(" "))
                 rv.setOnClickPendingIntent(R.id.wroot, open)
                 for (k in 0 until 5) {
                     if (k >= list.size) {
@@ -58,15 +73,18 @@ class WidgetProvider : AppWidgetProvider() {
                     rv.setTextColor(nm[k], if (it.done) Color.parseColor("#737373") else Color.parseColor("#111111"))
                     rv.setImageViewResource(chk[k], if (it.done) R.drawable.ck_on else R.drawable.ck_off)
                     rv.setInt(chk[k], "setColorFilter", col)
+                    rv.setViewVisibility(du[k], View.VISIBLE)
                     if (it.done) {
                         rv.setTextViewText(du[k], "ทำแล้ว")
-                        rv.setTextColor(du[k], Color.parseColor("#525252"))
+                        rv.setTextColor(du[k], 0xFF525252.toInt())
+                        rv.setInt(du[k], "setBackgroundColor", 0xFFEEEEEE.toInt())
                     } else if (it.hasDate) {
                         val n = daysLeft(it.dueDay)
                         rv.setTextViewText(du[k], leftText(n))
                         rv.setTextColor(du[k], statusColor(n))
+                        rv.setInt(du[k], "setBackgroundColor", tagBg(n))
                     } else {
-                        rv.setTextViewText(du[k], "")
+                        rv.setViewVisibility(du[k], View.GONE)
                     }
                     val tick = PendingIntent.getBroadcast(
                         c, it.id.toInt(),
