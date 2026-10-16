@@ -23,8 +23,10 @@ data class Item(
     val payDay: Long = 0L, // วันที่ชำระ (0 = ไม่ระบุ)
     val repN: Int = 0, // ซ้ำทุก N หน่วย (0 = ใช้ค่า repeat แบบเดิม)
     val repUnit: Int = 1, // 0 วัน, 1 เดือน, 2 ปี, 3 สัปดาห์
-    val remind: String = "" // เตือนล่วงหน้าเฉพาะรายการ เช่น "30,7,1" (ว่าง = ใช้ค่าเริ่มต้น)
+    val remind: String = "", // เตือนล่วงหน้าเฉพาะรายการ เช่น "30,7,1" (ว่าง = ใช้ค่าเริ่มต้น)
+    val photos: String = "" // ชื่อไฟล์รูปแนบ คั่นด้วย ,
 ) {
+    val photoList: List<String> get() = photos.split(",").filter { it.isNotBlank() }
     val customLeads: List<Int> get() = remind.split(",").mapNotNull { it.trim().toIntOrNull() }
     val every: Int get() = if (repN > 0) repN else when (repeat) { 1 -> 12; 2 -> 6; else -> 0 }
     val everyUnit: Int get() = if (repN > 0) repUnit else 1
@@ -84,9 +86,36 @@ fun roll(i: Item): Item {
     if (i.hasDate && i.every > 0) {
         val next = addEvery(LocalDate.ofEpochDay(i.dueDay), i.every, i.everyUnit).toEpochDay()
         val pay = if (i.payDay > 0) addEvery(LocalDate.ofEpochDay(i.payDay), i.every, i.everyUnit).toEpochDay() else 0L
-        return i.copy(type = if (i.type == 3) 3 else 0, baseDay = next, payDay = pay)
+        return i.copy(type = if (i.type == 3) 3 else 0, baseDay = next, payDay = pay, doneAt = 0L)
     }
     return i.copy(done = true, doneAt = LocalDate.now().toEpochDay())
+}
+
+// รายการที่ซ้ำและถูกติ๊กใน widget ไว้ก่อนวันนี้ ให้เลื่อนไปรอบถัดไป
+fun settle(c: Context) {
+    val today = LocalDate.now().toEpochDay()
+    val l = Store.load(c)
+    var changed = false
+    val n = l.map {
+        if (!it.done && it.hasDate && it.every > 0 && it.doneAt in 1 until today) {
+            changed = true
+            roll(it)
+        } else it
+    }
+    if (changed) Store.save(c, n)
+}
+
+// คำนวณรอบซ้ำจากวันที่ a ถึง b (เป็น จำนวน + หน่วย: 0 วัน 1 เดือน 2 ปี 3 สัปดาห์)
+fun intervalBetween(a: Long, b: Long): Pair<Int, Int>? {
+    if (b <= a) return null
+    val d1 = LocalDate.ofEpochDay(a)
+    val d2 = LocalDate.ofEpochDay(b)
+    val months = java.time.temporal.ChronoUnit.MONTHS.between(d1, d2).toInt()
+    if (months >= 1 && d1.plusMonths(months.toLong()) == d2) {
+        return if (months % 12 == 0) (months / 12) to 2 else months to 1
+    }
+    val days = (b - a).toInt()
+    return if (days % 7 == 0) (days / 7) to 3 else days to 0
 }
 
 fun itemsToJson(list: List<Item>): JSONArray {
@@ -97,7 +126,7 @@ fun itemsToJson(list: List<Item>): JSONArray {
                 .put("type", it.type).put("baseDay", it.baseDay).put("months", it.months)
                 .put("repeat", it.repeat).put("details", it.details)
                 .put("done", it.done).put("hasDate", it.hasDate)
-                .put("widget", it.widget).put("doneAt", it.doneAt).put("payDay", it.payDay).put("repN", it.repN).put("repUnit", it.repUnit).put("remind", it.remind)
+                .put("widget", it.widget).put("doneAt", it.doneAt).put("payDay", it.payDay).put("repN", it.repN).put("repUnit", it.repUnit).put("remind", it.remind).put("photos", it.photos)
         )
     }
     return a
@@ -110,7 +139,7 @@ fun itemsFromJson(a: JSONArray): List<Item> = List(a.length()) { k ->
         o.getInt("type"), o.getLong("baseDay"), o.getInt("months"),
         o.getInt("repeat"), o.getString("details"),
         o.getBoolean("done"), o.getBoolean("hasDate"),
-        o.optBoolean("widget", true), o.optLong("doneAt", 0L), o.optLong("payDay", 0L), o.optInt("repN", 0), o.optInt("repUnit", 1), o.optString("remind", "")
+        o.optBoolean("widget", true), o.optLong("doneAt", 0L), o.optLong("payDay", 0L), o.optInt("repN", 0), o.optInt("repUnit", 1), o.optString("remind", ""), o.optString("photos", "")
     )
 }
 
