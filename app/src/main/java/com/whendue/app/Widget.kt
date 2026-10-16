@@ -40,11 +40,12 @@ class WidgetProvider : AppWidgetProvider() {
         }
 
         private fun draw(c: Context, m: AppWidgetManager, ids: IntArray) {
+            settle(c)
             val col = THEME_COLORS[Prefs.theme(c)]
             val today = LocalDate.now().toEpochDay()
             val list = Store.load(c)
                 .filter { it.widget && (!it.done || it.doneAt == today) }
-                .sortedWith(compareBy({ it.done }, { !it.hasDate }, { it.dueDay }))
+                .sortedWith(compareBy({ it.done || it.doneAt == today }, { !it.hasDate }, { it.dueDay }))
                 .take(5)
             val rows = intArrayOf(R.id.r0, R.id.r1, R.id.r2, R.id.r3, R.id.r4)
             val chk = intArrayOf(R.id.c0, R.id.c1, R.id.c2, R.id.c3, R.id.c4)
@@ -66,15 +67,16 @@ class WidgetProvider : AppWidgetProvider() {
                         continue
                     }
                     val it = list[k]
+                    val struck = it.done || it.doneAt == today
                     rv.setViewVisibility(rows[k], View.VISIBLE)
                     val name = SpannableString(it.name)
-                    if (it.done) name.setSpan(StrikethroughSpan(), 0, name.length, 0)
+                    if (struck) name.setSpan(StrikethroughSpan(), 0, name.length, 0)
                     rv.setTextViewText(nm[k], name)
-                    rv.setTextColor(nm[k], if (it.done) Color.parseColor("#737373") else Color.parseColor("#111111"))
-                    rv.setImageViewResource(chk[k], if (it.done) R.drawable.ck_on else R.drawable.ck_off)
+                    rv.setTextColor(nm[k], if (struck) Color.parseColor("#737373") else Color.parseColor("#111111"))
+                    rv.setImageViewResource(chk[k], if (struck) R.drawable.ck_on else R.drawable.ck_off)
                     rv.setInt(chk[k], "setColorFilter", col)
                     rv.setViewVisibility(du[k], View.VISIBLE)
-                    if (it.done) {
+                    if (struck) {
                         rv.setTextViewText(du[k], "ทำแล้ว")
                         rv.setTextColor(du[k], 0xFF525252.toInt())
                         rv.setInt(du[k], "setBackgroundColor", 0xFFEEEEEE.toInt())
@@ -102,8 +104,12 @@ class WidgetProvider : AppWidgetProvider() {
 class WidgetToggleReceiver : BroadcastReceiver() {
     override fun onReceive(c: Context, i: Intent) {
         val id = i.getLongExtra("id", 0L)
+        val today = java.time.LocalDate.now().toEpochDay()
         val l = Store.load(c).map {
-            if (it.id != id) it else if (it.done) it.copy(done = false, doneAt = 0L) else roll(it)
+            if (it.id != id) it
+            else if (it.done || it.doneAt == today) it.copy(done = false, doneAt = 0L) // แตะซ้ำ = ยกเลิกการติ๊ก
+            else if (it.hasDate && it.every > 0) it.copy(doneAt = today) // รายการซ้ำ: ขีดฆ่าวันนี้ แล้วเลื่อนรอบพรุ่งนี้
+            else it.copy(done = true, doneAt = today)
         }
         Store.save(c, l)
         WidgetProvider.refresh(c)
