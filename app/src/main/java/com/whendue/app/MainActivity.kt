@@ -20,6 +20,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -42,7 +44,10 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import kotlinx.coroutines.delay
 import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
 import java.io.File
@@ -82,12 +87,24 @@ fun fmtLeads(l: List<Int>): String = l.sortedDescending().joinToString(", ") { f
 
 val LEAD_PRESETS = listOf(1, 3, 7, 14, 30, 90, 180, 365)
 
+object Bus {
+    var tick by mutableStateOf(0)
+}
+
 class MainActivity : ComponentActivity() {
+    override fun onResume() {
+        super.onResume()
+        settle(this)
+        Bus.tick++
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         if (Build.VERSION.SDK_INT >= 33) {
             requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1)
         }
+        settle(this)
+        Photos.cleanup(this)
         Notify.schedule(this)
         setContent { App() }
     }
@@ -112,6 +129,26 @@ fun App() {
         Store.save(c, l)
         WidgetProvider.refresh(c)
         Notify.schedule(c)
+    }
+
+    var confirm by remember { mutableStateOf<ConfirmInfo?>(null) }
+    var undo by remember { mutableStateOf<UndoInfo?>(null) }
+    var viewer by remember { mutableStateOf<Pair<Long, Int>?>(null) } // id รายการ, ลำดับรูป
+
+    fun commitUndo(msg: String, l: List<Item>) {
+        val before = all
+        commit(l)
+        undo = UndoInfo(msg, before)
+    }
+
+    val tick = Bus.tick
+    LaunchedEffect(tick) { all = Store.load(c) }
+
+    LaunchedEffect(undo) {
+        if (undo != null) {
+            delay(5000)
+            undo = null
+        }
     }
 
     fun reload() {
@@ -145,8 +182,12 @@ fun App() {
                             0 -> Home(all, { detailId = it.id }, { openForm(null) }, { openForm(it) })
                             1 -> Archive(
                                 all.filter { it.done },
-                                { r -> commit(all.map { if (it.id == r.id) r.copy(done = false, doneAt = 0L) else it }) },
-                                { r -> commit(all.filter { it.id != r.id }) }
+                                { r -> commitUndo("กู้คืน “${r.name}” แล้ว", all.map { if (it.id == r.id) r.copy(done = false, doneAt = 0L) else it }) },
+                                { r ->
+                                    confirm = ConfirmInfo("ลบ “${r.name}” ถาวร?", "เลิกทำได้ภายใน 5 วินาที", "ลบ", true) {
+                                        commitUndo("ลบ “${r.name}” แล้ว", all.filter { it.id != r.id })
+                                    }
+                                }
                             )
                             else -> SettingsTab(
                                 cats, { Prefs.setCats(c, it); cats = it },
@@ -166,27 +207,66 @@ fun App() {
                             detail, leads,
                             onEdit = { openForm(detail) },
                             onRenew = {
-                                val next = LocalDate.ofEpochDay(detail.baseDay).plusMonths(12).toEpochDay()
-                                commit(all.map { if (it.id == detail.id) detail.copy(baseDay = next) else it })
-                                Toast.makeText(c, "ต่ออายุ +1 ปี แล้ว", Toast.LENGTH_SHORT).show()
+                                confirm = ConfirmInfo("ต่ออายุ +1 ปี?", "วันที่จะเลื่อนไป 1 ปี เลิกทำได้ภายใน 5 วินาที", "ต่ออายุ") {
+                                    val next = LocalDate.ofEpochDay(detail.baseDay).plusMonths(12).toEpochDay()
+                                    commitUndo("ต่ออายุ +1 ปี แล้ว", all.map { if (it.id == detail.id) detail.copy(baseDay = next) else it })
+                                }
                             },
-                            onDone = { commit(all.map { if (it.id == detail.id) roll(detail) else it }); detailId = null },
-                            onDelete = { commit(all.filter { it.id != detail.id }); detailId = null }
+                            onDone = {
+                                val msg = if (detail.hasDate && detail.every > 0) "จะเลื่อนไปรอบถัดไป" else "จะย้ายเข้าที่เก็บถาวร"
+                                confirm = ConfirmInfo("เสร็จแล้ว?", "$msg เลิกทำได้ภายใน 5 วินาที", "เสร็จแล้ว") {
+                                    commitUndo("ทำเสร็จแล้ว", all.map { if (it.id == detail.id) roll(detail) else it })
+                                    detailId = null
+                                }
+                            },
+                            onDelete = {
+                                confirm = ConfirmInfo("ลบ “${detail.name}”?", "รายการจะถูกลบ แต่เลิกทำได้ภายใน 5 วินาที", "ลบ", true) {
+                                    commitUndo("ลบ “${detail.name}” แล้ว", all.filter { it.id != detail.id })
+                                    detailId = null
+                                }
+                            },
+                            onPhoto = { idx -> viewer = detail.id to idx }
                         )
                     }
                 }
+                val vi = viewer
+                val vItem = if (vi != null) all.firstOrNull { it.id == vi.first } else null
+                if (vi != null && vItem != null && vItem.photoList.isNotEmpty()) {
+                    BackHandler { viewer = null }
+                    Surface(Modifier.fillMaxSize(), color = INK) {
+                        PhotoViewer(vItem.photoList, vi.second, onClose = { viewer = null }) { name ->
+                            confirm = ConfirmInfo("ลบรูปนี้?", "เลิกทำได้ภายใน 5 วินาที", "ลบ", true) {
+                                val left = vItem.photoList.filter { p -> p != name }.joinToString(",")
+                                commitUndo("ลบรูปแล้ว", all.map { if (it.id == vItem.id) it.copy(photos = left) else it })
+                            }
+                        }
+                    }
+                }
                 if (form) {
-                    BackHandler { form = false }
                     Surface(Modifier.fillMaxSize(), color = Color.White) {
                         FormScreen(
                             initial = formItem, cats = cats, leads = leads,
                             onClose = { form = false },
                             onSave = { n ->
-                                commit(if (all.any { it.id == n.id }) all.map { if (it.id == n.id) n else it } else all + n)
+                                val isNew = all.none { it.id == n.id }
+                                commitUndo("บันทึก “${n.name}” แล้ว", if (isNew) all + n else all.map { if (it.id == n.id) n else it })
                                 form = false
                             }
                         )
                     }
+                }
+                undo?.let { u ->
+                    Row(
+                        Modifier.align(Alignment.BottomCenter).padding(start = 12.dp, end = 12.dp, bottom = 76.dp)
+                            .fillMaxWidth().height(52.dp).background(Color(0xFF262626)).padding(horizontal = 14.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(u.msg, color = Color.White, fontSize = 14.sp, modifier = Modifier.weight(1f))
+                        TextButton(onClick = { commit(u.before); undo = null }) { Text("เลิกทำ", color = Color.White, fontWeight = FontWeight.Bold) }
+                    }
+                }
+                confirm?.let { ci ->
+                    ConfirmDialog(ci.title, ci.body, "ยกเลิก", ci.ok, ci.danger, { ci.action(); confirm = null }, { confirm = null })
                 }
             }
         }
@@ -325,55 +405,123 @@ fun OptionRow(title: String, desc: String? = null, selected: Boolean = false, on
     }
 }
 
+val MONTH_ABBR = listOf("ม.ค.", "ก.พ.", "มี.ค.", "เม.ย.", "พ.ค.", "มิ.ย.", "ก.ค.", "ส.ค.", "ก.ย.", "ต.ค.", "พ.ย.", "ธ.ค.")
+
 @Composable
-fun CalendarSheet(initial: Long, onPick: (Long) -> Unit, onClose: () -> Unit) {
+fun GridCell(label: String, selected: Boolean, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    val primary = MaterialTheme.colorScheme.primary
+    Box(
+        modifier.height(48.dp).border(1.dp, if (selected) primary else BORDER)
+            .background(if (selected) primary else Color.White).clickable(onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(label, fontSize = 16.sp, color = if (selected) Color.White else INK, fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal)
+    }
+}
+
+@Composable
+fun CalendarSheet(
+    initial: Long, onPick: (Long) -> Unit, onClose: () -> Unit,
+    title: String = "เลือกวันที่", note: ((Long) -> String)? = null
+) {
     var sel by remember { mutableStateOf(initial) }
     var month by remember { mutableStateOf(LocalDate.ofEpochDay(initial).withDayOfMonth(1)) }
+    var mode by remember { mutableStateOf(0) } // 0 = วัน, 1 = เลือกเดือน, 2 = เลือกปี (พ.ศ.)
     val primary = MaterialTheme.colorScheme.primary
+    val today = LocalDate.now().toEpochDay()
     fun setSel(d: Long) {
         sel = d
         month = LocalDate.ofEpochDay(d).withDayOfMonth(1)
     }
-    Sheet("เลือกวันที่", onClose) {
+    Sheet(title, onClose) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(44.dp).background(Color(0xFFF5F5F5)).clickable { month = month.minusMonths(1) }, contentAlignment = Alignment.Center) { Text("‹", fontSize = 22.sp) }
-            Text("${MONTH_FULL[month.monthValue - 1]} ${month.year + 543}", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Box(
+                    Modifier.height(44.dp).border(1.dp, if (mode == 1) primary else BORDER).clickable { mode = if (mode == 1) 0 else 1 }.padding(horizontal = 12.dp),
+                    contentAlignment = Alignment.Center
+                ) { Text(MONTH_FULL[month.monthValue - 1] + " ▾", fontSize = 16.sp, fontWeight = FontWeight.Bold) }
+                Box(
+                    Modifier.height(44.dp).border(1.dp, if (mode == 2) primary else BORDER).clickable { mode = if (mode == 2) 0 else 2 }.padding(horizontal = 12.dp),
+                    contentAlignment = Alignment.Center
+                ) { Text("${month.year + 543} ▾", fontSize = 16.sp, fontWeight = FontWeight.Bold) }
+            }
             Box(Modifier.size(44.dp).background(Color(0xFFF5F5F5)).clickable { month = month.plusMonths(1) }, contentAlignment = Alignment.Center) { Text("›", fontSize = 22.sp) }
         }
-        Row(Modifier.fillMaxWidth()) {
-            listOf("อา", "จ", "อ", "พ", "พฤ", "ศ", "ส").forEach {
-                Text(it, Modifier.weight(1f), textAlign = TextAlign.Center, fontSize = 13.sp, color = GRAY, fontWeight = FontWeight.SemiBold)
-            }
-        }
-        val offset = month.dayOfWeek.value % 7
-        val len = month.lengthOfMonth()
-        val rows = (offset + len + 6) / 7
-        for (r in 0 until rows) {
-            Row(Modifier.fillMaxWidth()) {
-                for (k in 0 until 7) {
-                    val d = r * 7 + k - offset + 1
-                    val valid = d in 1..len
-                    val picked = valid && month.withDayOfMonth(d).toEpochDay() == sel
-                    Box(
-                        Modifier.weight(1f).height(44.dp)
-                            .then(if (picked) Modifier.background(primary) else Modifier)
-                            .clickable(enabled = valid) { sel = month.withDayOfMonth(d).toEpochDay() },
-                        contentAlignment = Alignment.Center
-                    ) {
-                        if (valid) Text("$d", fontSize = 16.sp, color = if (picked) Color.White else INK, fontWeight = if (picked) FontWeight.Bold else FontWeight.Normal)
+        when (mode) {
+            1 -> {
+                for (r in 0 until 4) {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        for (k in 0 until 3) {
+                            val mm = r * 3 + k + 1
+                            GridCell(MONTH_ABBR[mm - 1], mm == month.monthValue, Modifier.weight(1f)) {
+                                month = month.withMonth(mm)
+                                mode = 0
+                            }
+                        }
                     }
                 }
             }
-        }
-        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Chip("วันนี้") { setSel(LocalDate.now().toEpochDay()) }
-            Chip("+1 เดือน") { setSel(LocalDate.ofEpochDay(sel).plusMonths(1).toEpochDay()) }
-            Chip("+6 เดือน") { setSel(LocalDate.ofEpochDay(sel).plusMonths(6).toEpochDay()) }
-            Chip("+1 ปี") { setSel(LocalDate.ofEpochDay(sel).plusYears(1).toEpochDay()) }
-        }
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(onClick = onClose, shape = RectangleShape, modifier = Modifier.weight(1f).height(52.dp), border = BorderStroke(1.dp, INK), colors = ButtonDefaults.outlinedButtonColors(contentColor = INK)) { Text("ยกเลิก", fontWeight = FontWeight.SemiBold) }
-            Button(onClick = { onPick(sel) }, shape = RectangleShape, modifier = Modifier.weight(1f).height(52.dp)) { Text("ตกลง", fontWeight = FontWeight.SemiBold) }
+            2 -> {
+                val y0 = LocalDate.now().year - 10
+                for (r in 0 until 11) {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        for (k in 0 until 4) {
+                            val y = y0 + r * 4 + k
+                            GridCell("${y + 543}", y == month.year, Modifier.weight(1f)) {
+                                month = month.withYear(y)
+                                mode = 0
+                            }
+                        }
+                    }
+                }
+                Hint("พ.ศ. ${month.year + 543} = ค.ศ. ${month.year}")
+            }
+            else -> {
+                Row(Modifier.fillMaxWidth()) {
+                    listOf("อา", "จ", "อ", "พ", "พฤ", "ศ", "ส").forEach {
+                        Text(it, Modifier.weight(1f), textAlign = TextAlign.Center, fontSize = 13.sp, color = GRAY, fontWeight = FontWeight.SemiBold)
+                    }
+                }
+                val offset = month.dayOfWeek.value % 7
+                val len = month.lengthOfMonth()
+                val rows = (offset + len + 6) / 7
+                for (r in 0 until rows) {
+                    Row(Modifier.fillMaxWidth()) {
+                        for (k in 0 until 7) {
+                            val d = r * 7 + k - offset + 1
+                            val valid = d in 1..len
+                            val day = if (valid) month.withDayOfMonth(d).toEpochDay() else 0L
+                            val picked = valid && day == sel
+                            Box(
+                                Modifier.weight(1f).height(44.dp)
+                                    .then(if (picked) Modifier.background(primary) else Modifier)
+                                    .then(if (valid && day == today) Modifier.border(1.dp, primary) else Modifier)
+                                    .clickable(enabled = valid) { sel = day },
+                                contentAlignment = Alignment.Center
+                            ) {
+                                if (valid) Text("$d", fontSize = 16.sp, color = if (picked) Color.White else INK, fontWeight = if (picked) FontWeight.Bold else FontWeight.Normal)
+                            }
+                        }
+                    }
+                }
+                Hint("แตะเดือนหรือปีเพื่อเลือกเร็ว")
+                FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Chip("วันนี้") { setSel(today) }
+                    Chip("+1 เดือน") { setSel(LocalDate.ofEpochDay(sel).plusMonths(1).toEpochDay()) }
+                    Chip("+6 เดือน") { setSel(LocalDate.ofEpochDay(sel).plusMonths(6).toEpochDay()) }
+                    Chip("+1 ปี") { setSel(LocalDate.ofEpochDay(sel).plusYears(1).toEpochDay()) }
+                }
+                if (note != null) {
+                    Row(Modifier.fillMaxWidth().border(1.dp, primary).padding(12.dp)) {
+                        Text(note(sel), color = primary, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+                    }
+                }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = onClose, shape = RectangleShape, modifier = Modifier.weight(1f).height(52.dp), border = BorderStroke(1.dp, INK), colors = ButtonDefaults.outlinedButtonColors(contentColor = INK)) { Text("ยกเลิก", fontWeight = FontWeight.SemiBold) }
+                    Button(onClick = { onPick(sel) }, shape = RectangleShape, modifier = Modifier.weight(1f).height(52.dp)) { Text("ตกลง", fontWeight = FontWeight.SemiBold) }
+                }
+            }
         }
     }
 }
@@ -487,7 +635,12 @@ fun Home(all: List<Item>, onOpen: (Item) -> Unit, onAdd: () -> Unit, onQuick: (I
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Column(Modifier.weight(1f)) {
-                                Text(d.name, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                                val ticked = d.doneAt == LocalDate.now().toEpochDay()
+                                Text(
+                                    d.name, fontSize = 16.sp, fontWeight = FontWeight.SemiBold,
+                                    color = if (ticked) Color(0xFF737373) else Color.Unspecified,
+                                    textDecoration = if (ticked) TextDecoration.LineThrough else null
+                                )
                                 Text(subText(d), fontSize = 14.sp, color = GRAY)
                             }
                             Tag(leftText(n), Color(statusColor(n)))
@@ -522,7 +675,7 @@ fun TabBar(sel: Int, onSel: (Int) -> Unit) {
 @Composable
 fun DetailScreen(
     i: Item, leads: List<Int>,
-    onEdit: () -> Unit, onRenew: () -> Unit, onDone: () -> Unit, onDelete: () -> Unit
+    onEdit: () -> Unit, onRenew: () -> Unit, onDone: () -> Unit, onDelete: () -> Unit, onPhoto: (Int) -> Unit
 ) {
     Column(
         Modifier.fillMaxSize().verticalScroll(rememberScrollState())
@@ -559,6 +712,12 @@ fun DetailScreen(
         }
         Heading("รายละเอียด")
         Text(if (i.details.isBlank()) "-" else i.details, fontSize = 14.sp)
+        if (i.photoList.isNotEmpty()) {
+            Heading("รูปแนบ")
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                i.photoList.forEachIndexed { idx, n -> Thumb(n, 96.dp, onClick = { onPhoto(idx) }) }
+            }
+        }
         Spacer(Modifier.height(12.dp))
         if (i.hasDate) {
             Button(onClick = onRenew, shape = RectangleShape, modifier = Modifier.fillMaxWidth().height(52.dp)) { Text("ต่ออายุ +1 ปี", fontWeight = FontWeight.SemiBold) }
@@ -588,9 +747,25 @@ fun FormScreen(initial: Item?, cats: List<String>, leads: List<Int>, onClose: ()
     var remind by remember { mutableStateOf(initial?.customLeads ?: emptyList()) }
     var details by remember { mutableStateOf(initial?.details ?: "") }
     var widget by remember { mutableStateOf(initial?.widget ?: true) }
+    var photos by remember { mutableStateOf(initial?.photoList ?: emptyList()) }
+    var added by remember { mutableStateOf(listOf<String>()) }
+    var confirmSave by remember { mutableStateOf(false) }
+    var confirmDiscard by remember { mutableStateOf(false) }
     var sheet by remember { mutableStateOf(0) } // 1 หมวด 2 ชนิดวัน 3 วันที่ 4 ครบกำหนด 5 เดือน 6 เดือนกำหนดเอง
     var scanR by remember { mutableStateOf<ScanResult?>(null) }
     var scanTick by remember { mutableStateOf(0) }
+
+    val photoUri = remember { FileProvider.getUriForFile(c, c.packageName + ".fp", File(c.cacheDir, "photo_tmp.jpg")) }
+    fun addPhoto(u: android.net.Uri) {
+        if (photos.size >= 5) return
+        val n = Photos.add(c, u)
+        if (n != null) {
+            photos = photos + n
+            added = added + n
+        } else Toast.makeText(c, "แนบรูปไม่สำเร็จ", Toast.LENGTH_SHORT).show()
+    }
+    val takePhoto = rememberLauncherForActivityResult(ActivityResultContracts.TakePicture()) { ok -> if (ok) addPhoto(photoUri) }
+    val pickPhoto = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { u -> if (u != null) addPhoto(u) }
 
     val scanFile = remember { File(c.cacheDir, "scan.jpg") }
     val scanUri = remember { FileProvider.getUriForFile(c, c.packageName + ".fp", scanFile) }
@@ -606,6 +781,26 @@ fun FormScreen(initial: Item?, cats: List<String>, leads: List<Int>, onClose: ()
     val due = if (ui == 1 || ui == 2) LocalDate.ofEpochDay(day).plusMonths(months.toLong()).toEpochDay() else day
     val primary = MaterialTheme.colorScheme.primary
     val dateLabel = listOf("วันหมดอายุ", "วันที่เปิดใช้", "วันที่เริ่มประกัน", "วันที่ชำระ")[ui.coerceAtMost(3)]
+
+    fun build(): Item {
+        val base = initial ?: Item(0L, "", cat, 0, day, months, 0, "", false, true)
+        return base.copy(
+            id = initial?.id?.takeIf { it > 0 } ?: 0L,
+            name = name.trim(), category = cat, type = if (ui == 4) 0 else ui,
+            baseDay = day, months = months,
+            repeat = if ((ui == 0 || ui == 3) && repN > 0) 3 else 0,
+            repN = if (ui == 0 || ui == 3) repN else 0, repUnit = repUnit,
+            remind = remind.joinToString(","), details = details,
+            hasDate = ui != 4, widget = widget, photos = photos.joinToString(",")
+        )
+    }
+    val isNew = initial == null || initial.id <= 0
+    val dirty = if (isNew) (name.isNotBlank() || details.isNotBlank() || photos.isNotEmpty()) else build() != initial
+    fun discard() {
+        added.forEach { Photos.file(c, it).delete() }
+        onClose()
+    }
+    BackHandler { if (dirty) confirmDiscard = true else discard() }
 
     Column(Modifier.fillMaxSize()) {
         Column(
@@ -639,16 +834,16 @@ fun FormScreen(initial: Item?, cats: List<String>, leads: List<Int>, onClose: ()
 
             if (ui == 0 || ui == 3) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Select(dateLabel, thai(day), Modifier.weight(1f), cal = true) { sheet = 3 }
-                    Select("ครบกำหนด", repText(repN, repUnit), Modifier.weight(1f)) { sheet = 4 }
+                    Select(dateLabel, thai(day), Modifier.weight(3f), cal = true) { sheet = 3 }
+                    Select("ครบกำหนด", repText(repN, repUnit), Modifier.weight(2f)) { sheet = 4 }
                 }
             }
             if (ui == 1 || ui == 2) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Select(dateLabel, thai(day), Modifier.weight(1f), cal = true) { sheet = 3 }
+                    Select(dateLabel, thai(day), Modifier.weight(3f), cal = true) { sheet = 3 }
                     Select(
                         if (ui == 1) "อายุหลังเปิด" else "ระยะประกัน",
-                        if (ui == 1) "$months เดือน" else fmtMonths(months), Modifier.weight(1f)
+                        if (ui == 1) "$months เดือน" else fmtMonths(months), Modifier.weight(2f)
                     ) { sheet = 5 }
                 }
                 Row(
@@ -675,6 +870,16 @@ fun FormScreen(initial: Item?, cats: List<String>, leads: List<Int>, onClose: ()
                 )
             }
 
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Lab("แนบรูป (ไม่เกิน 5 รูป)")
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    photos.forEach { n -> Thumb(n, 56.dp, onRemove = { photos = photos - n }) }
+                    if (photos.size < 5) {
+                        Box(Modifier.size(56.dp).border(1.dp, BORDER).clickable { sheet = 9 }, contentAlignment = Alignment.Center) { Text("+", fontSize = 24.sp) }
+                    }
+                }
+            }
+
             Row(
                 Modifier.fillMaxWidth().clickable { widget = !widget },
                 horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically
@@ -683,25 +888,23 @@ fun FormScreen(initial: Item?, cats: List<String>, leads: List<Int>, onClose: ()
                 Checkbox(checked = widget, onCheckedChange = { widget = it })
             }
         }
-        Button(
-            onClick = {
-                if (name.isBlank()) {
-                    Toast.makeText(c, "ใส่ชื่อรายการก่อน", Toast.LENGTH_SHORT).show()
-                } else onSave(
-                    Item(
-                        id = initial?.id?.takeIf { it > 0 } ?: System.currentTimeMillis(),
-                        name = name.trim(), category = cat, type = if (ui == 4) 0 else ui,
-                        baseDay = day, months = months,
-                        repeat = if ((ui == 0 || ui == 3) && repN > 0) 3 else 0,
-                        repN = if (ui == 0 || ui == 3) repN else 0, repUnit = repUnit, remind = remind.joinToString(","), details = details,
-                        done = initial?.done ?: false, hasDate = ui != 4,
-                        widget = widget, doneAt = initial?.doneAt ?: 0L
-                    )
-                )
-            },
-            shape = RectangleShape,
-            modifier = Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, bottom = 12.dp).navigationBarsPadding().height(52.dp)
-        ) { Text("บันทึก", fontWeight = FontWeight.SemiBold) }
+        Row(
+            Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, bottom = 12.dp).navigationBarsPadding(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            OutlinedButton(
+                onClick = { if (dirty) confirmDiscard = true else discard() }, shape = RectangleShape,
+                modifier = Modifier.weight(1f).height(52.dp),
+                border = BorderStroke(1.dp, INK), colors = ButtonDefaults.outlinedButtonColors(contentColor = INK)
+            ) { Text("ยกเลิก", fontWeight = FontWeight.SemiBold) }
+            Button(
+                onClick = {
+                    if (name.isBlank()) Toast.makeText(c, "ใส่ชื่อรายการก่อน", Toast.LENGTH_SHORT).show()
+                    else confirmSave = true
+                },
+                shape = RectangleShape, modifier = Modifier.weight(2f).height(52.dp)
+            ) { Text("บันทึก", fontWeight = FontWeight.SemiBold) }
+        }
     }
 
     when (sheet) {
@@ -718,7 +921,30 @@ fun FormScreen(initial: Item?, cats: List<String>, leads: List<Int>, onClose: ()
                 OptionRow(repText(pn, pu), selected = repText(repN, repUnit) == repText(pn, pu)) { repN = pn; repUnit = pu; sheet = 0 }
             }
             OptionRow("กำหนดเอง…") { sheet = 7 }
+            OptionRow("เลือกวันครบกำหนดรอบถัดไปจากปฏิทิน…", "แอปคำนวณรอบให้ เช่น 30 ต.ค. → 30 พ.ย. = ทุกเดือน") { sheet = 10 }
         }
+        9 -> Sheet("เพิ่มรูป", { sheet = 0 }) {
+            OptionRow("ถ่ายรูป") { sheet = 0; takePhoto.launch(photoUri) }
+            OptionRow("เลือกจากแกลเลอรี") { sheet = 0; pickPhoto.launch("image/*") }
+            Hint("แนบได้ไม่เกิน 5 รูปต่อรายการ")
+        }
+        10 -> CalendarSheet(
+            LocalDate.ofEpochDay(day).plusMonths(1).toEpochDay(),
+            { d ->
+                val iv = intervalBetween(day, d)
+                if (iv != null) {
+                    repN = iv.first
+                    repUnit = iv.second
+                    sheet = 0
+                } else Toast.makeText(c, "เลือกวันหลัง " + thai(day), Toast.LENGTH_SHORT).show()
+            },
+            { sheet = 0 },
+            title = "เลือกวันครบกำหนดรอบถัดไป",
+            note = { d ->
+                val iv = intervalBetween(day, d)
+                if (iv == null) "ต้องเลือกวันหลัง " + thai(day) else thai(day) + " → " + thai(d) + " = " + repText(iv.first, iv.second)
+            }
+        )
         8 -> RemindSheet(remind, leads, { remind = it; sheet = 0 }, { sheet = 0 })
         7 -> RepeatDialog(repN, repUnit, { n, u -> repN = n; repUnit = u; sheet = 0 }, { sheet = 0 })
         5 -> MonthsSheet(
@@ -730,6 +956,23 @@ fun FormScreen(initial: Item?, cats: List<String>, leads: List<Int>, onClose: ()
             title = "จำนวนเดือน", initial = "", numeric = true,
             onOk = { v -> v.toIntOrNull()?.let { if (it in 1..120) months = it }; sheet = 0 },
             onClose = { sheet = 0 }
+        )
+    }
+
+    if (confirmSave) {
+        val d = build()
+        val what = if (d.hasDate) " · " + (when (d.type) { 2 -> "หมดประกัน "; 3 -> "ชำระ "; else -> "หมดอายุ " }) + thai(d.dueDay) else ""
+        ConfirmDialog(
+            "บันทึกรายการนี้?", d.name + " · " + d.category + what + "\nบันทึกแล้วเลิกทำได้ภายใน 5 วินาที",
+            "ยกเลิก", "บันทึก", false,
+            { confirmSave = false; onSave(if (d.id == 0L) d.copy(id = System.currentTimeMillis()) else d) },
+            { confirmSave = false }
+        )
+    }
+    if (confirmDiscard) {
+        ConfirmDialog(
+            "ทิ้งการเปลี่ยนแปลง?", "ข้อมูลที่กรอกไว้จะหายไป", "กลับไปแก้ไข", "ทิ้ง", true,
+            { confirmDiscard = false; discard() }, { confirmDiscard = false }
         )
     }
 
@@ -779,8 +1022,8 @@ fun ScanScreen(r: ScanResult, path: String, tick: Int, name0: String, months0: I
             OutlinedTextField(name, { name = it }, shape = RectangleShape, singleLine = true, modifier = Modifier.fillMaxWidth())
         }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Select("วันหมดอายุ", thai(day), Modifier.weight(1f), cal = true) { sheet = 1 }
-            Select("อายุหลังเปิด (PAO)", "$months เดือน", Modifier.weight(1f)) { sheet = 2 }
+            Select("วันหมดอายุ", thai(day), Modifier.weight(3f), cal = true) { sheet = 1 }
+            Select("อายุหลังเปิด (PAO)", "$months เดือน", Modifier.weight(2f)) { sheet = 2 }
         }
         Text(
             if (r.day == null) "อ่านวันที่ไม่ได้ เลือกวันเองได้เลย" else "ปีบนฉลากแปลงเป็น พ.ศ. ให้แล้ว กรุณาตรวจสอบ",
@@ -839,17 +1082,17 @@ fun SettingsTab(
     val c = LocalContext.current
     var catPrompt by remember { mutableStateOf<String?>(null) } // "" = เพิ่มใหม่
     var leadPrompt by remember { mutableStateOf(false) }
-    val exp = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { u ->
+    val exp = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/zip")) { u ->
         if (u != null) {
-            c.contentResolver.openOutputStream(u)?.use { it.write(Backup.export(c).toByteArray()) }
+            c.contentResolver.openOutputStream(u)?.use { BackupZip.export(c, it) }
             Toast.makeText(c, "สำรองข้อมูลแล้ว", Toast.LENGTH_SHORT).show()
         }
     }
     val imp = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { u ->
         if (u != null) {
             try {
-                val s = c.contentResolver.openInputStream(u)!!.bufferedReader().use { it.readText() }
-                Backup.import(c, s)
+                val ok = c.contentResolver.openInputStream(u)!!.use { BackupZip.import(c, it) }
+                if (!ok) throw IllegalStateException("bad file")
                 onReload()
                 Toast.makeText(c, "นำเข้าข้อมูลแล้ว", Toast.LENGTH_SHORT).show()
             } catch (e: Exception) {
@@ -894,8 +1137,8 @@ fun SettingsTab(
         Hint(THEME_NAMES[theme])
 
         Heading("ข้อมูล")
-        OutlinedButton(onClick = { exp.launch("whendue-backup.json") }, shape = RectangleShape, modifier = Modifier.fillMaxWidth()) { Text("สำรองข้อมูล (ส่งออกไฟล์)") }
-        OutlinedButton(onClick = { imp.launch(arrayOf("application/json", "*/*")) }, shape = RectangleShape, modifier = Modifier.fillMaxWidth()) { Text("นำเข้าข้อมูลจากไฟล์") }
+        OutlinedButton(onClick = { exp.launch("whendue-backup.zip") }, shape = RectangleShape, modifier = Modifier.fillMaxWidth()) { Text("สำรองข้อมูล (ไฟล์ zip รวมรูป)") }
+        OutlinedButton(onClick = { imp.launch(arrayOf("application/zip", "application/json", "*/*")) }, shape = RectangleShape, modifier = Modifier.fillMaxWidth()) { Text("นำเข้าข้อมูลจากไฟล์") }
     }
 
     catPrompt?.let { cp ->
@@ -1015,4 +1258,68 @@ fun LeadDialog(onOk: (Int) -> Unit, onClose: () -> Unit) {
         },
         dismissButton = { TextButton(onClick = onClose) { Text("ยกเลิก") } }
     )
+}
+
+class ConfirmInfo(val title: String, val body: String, val ok: String, val danger: Boolean = false, val action: () -> Unit)
+
+class UndoInfo(val msg: String, val before: List<Item>)
+
+@Composable
+fun ConfirmDialog(title: String, body: String, cancel: String, ok: String, danger: Boolean = false, onOk: () -> Unit, onCancel: () -> Unit) {
+    Dialog(onDismissRequest = onCancel) {
+        Surface(color = Color.White, shape = RectangleShape) {
+            Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(title, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                Text(body, fontSize = 14.sp, color = GRAY)
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(
+                        onClick = onCancel, shape = RectangleShape, modifier = Modifier.weight(1f).height(48.dp),
+                        border = BorderStroke(1.dp, INK), colors = ButtonDefaults.outlinedButtonColors(contentColor = INK)
+                    ) { Text(cancel, fontWeight = FontWeight.SemiBold) }
+                    Button(
+                        onClick = onOk, shape = RectangleShape, modifier = Modifier.weight(1f).height(48.dp),
+                        colors = if (danger) ButtonDefaults.buttonColors(containerColor = RED) else ButtonDefaults.buttonColors()
+                    ) { Text(ok, fontWeight = FontWeight.SemiBold) }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun Thumb(name: String, size: Dp, onRemove: (() -> Unit)? = null, onClick: (() -> Unit)? = null) {
+    val c = LocalContext.current
+    val bmp = remember(name) { Photos.load(c, name, 400) }
+    Box(Modifier.size(size).background(Color(0xFFEEEEEE)).then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)) {
+        if (bmp != null) Image(bmp, null, Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+        if (onRemove != null) {
+            Box(Modifier.align(Alignment.TopEnd).size(22.dp).background(INK).clickable(onClick = onRemove), contentAlignment = Alignment.Center) {
+                Text("✕", color = Color.White, fontSize = 11.sp)
+            }
+        }
+    }
+}
+
+@Composable
+fun PhotoViewer(names: List<String>, start: Int, onClose: () -> Unit, onDelete: (String) -> Unit) {
+    val c = LocalContext.current
+    val pager = rememberPagerState(initialPage = start.coerceIn(0, names.size - 1), pageCount = { names.size })
+    Column(Modifier.fillMaxSize().padding(top = 28.dp)) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text("‹ กลับ", color = Color.White, fontSize = 16.sp, modifier = Modifier.clickable(onClick = onClose).padding(vertical = 8.dp))
+            Text("${pager.currentPage + 1} / ${names.size}", color = Color.White, fontSize = 14.sp, modifier = Modifier.padding(vertical = 8.dp))
+        }
+        HorizontalPager(pager, Modifier.weight(1f).fillMaxWidth()) { p ->
+            val bmp = remember(names[p]) { Photos.load(c, names[p], 1600) }
+            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                if (bmp != null) Image(bmp, null, Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
+                else Text("ไม่พบรูป", color = Color.White)
+            }
+        }
+        OutlinedButton(
+            onClick = { onDelete(names[pager.currentPage.coerceIn(0, names.size - 1)]) }, shape = RectangleShape,
+            border = BorderStroke(1.dp, Color.White), colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
+            modifier = Modifier.fillMaxWidth().padding(20.dp).navigationBarsPadding().height(48.dp)
+        ) { Text("ลบรูปนี้", fontWeight = FontWeight.SemiBold) }
+    }
 }
